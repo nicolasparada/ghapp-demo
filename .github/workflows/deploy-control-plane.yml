@@ -100,8 +100,24 @@ jobs:
 
       - name: Ensure Artifact Registry exists
         run: |
-          terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
-            -target=google_artifact_registry_repository.server
+          if gcloud artifacts repositories describe "${ARTIFACT_REPOSITORY_ID}" --location="${REGION}" >/dev/null 2>&1; then
+            echo "Artifact Registry repository already exists"
+          else
+            gcloud artifacts repositories create "${ARTIFACT_REPOSITORY_ID}" \
+              --repository-format=docker \
+              --location="${REGION}" \
+              --description="Control-plane server images"
+          fi
+
+      - name: Import Artifact Registry repository into Terraform state (if needed)
+        run: |
+          if terraform -chdir="${TERRAFORM_DIR}" state show google_artifact_registry_repository.server >/dev/null 2>&1; then
+            echo "Artifact Registry repository already in Terraform state"
+          else
+            terraform -chdir="${TERRAFORM_DIR}" import \
+              google_artifact_registry_repository.server \
+              "projects/${PROJECT_ID}/locations/${REGION}/repositories/${ARTIFACT_REPOSITORY_ID}"
+          fi
 
       - name: Configure Docker auth for Artifact Registry
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
