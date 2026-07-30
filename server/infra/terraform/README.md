@@ -80,8 +80,8 @@ And these optional integration values:
 - Cloud SQL runs PostgreSQL 18 Enterprise tier `db-custom-1-3840` (PoC-friendly).
 - Cloud SQL IAM auth is enabled.
 - Cloud SQL Data API is enabled (`ALLOW_DATA_API`) for Cloud SQL Studio/executeSql.
-- Terraform always provisions IAM DB access for `parada.nicolas@outlook.com`:
-  - `roles/cloudsql.client`
-  - `roles/cloudsql.instanceUser`
-  - `roles/cloudsql.studioUser`
-  - plus Cloud SQL `CLOUD_IAM_USER` on the instance.
+- Terraform provisions human IAM DB access from `local.iam_db_login_user_emails` in `main.tf`.
+  - each email gets `roles/cloudsql.client`, `roles/cloudsql.instanceUser`, `roles/cloudsql.studioUser`
+  - each email is provisioned as Cloud SQL `CLOUD_IAM_USER` on the instance
+- Database read permissions are managed through DB role `ghapp_readonly` (migration `0002_readonly_access.sql`).
+  - add users to that DB role with: `GRANT ghapp_readonly TO "user@example.com";`

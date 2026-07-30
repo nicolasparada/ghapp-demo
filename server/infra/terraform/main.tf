@@ -19,9 +19,10 @@ locals {
   github_app_webhook_secret_secret_id = "ghapp-control-plane-github-app-webhook-secret"
   db_credentials_version              = 1
 
-  iam_db_login_user_email             = "parada.nicolas@outlook.com"
-  grant_human_db_project_roles        = true
-  should_grant_human_db_project_roles = local.grant_human_db_project_roles && trimspace(local.iam_db_login_user_email) != ""
+  iam_db_login_users = toset([
+    "parada.nicolas@outlook.com",
+  ])
+  should_grant_human_db_project_roles = length(local.iam_db_login_users) > 0
 
   allow_unauthenticated = true
   min_instance_count    = 0
@@ -38,6 +39,26 @@ locals {
   has_github_client_secret      = trimspace(var.github_client_secret) != ""
   has_github_app_private_key    = trimspace(var.github_app_private_key) != ""
   has_github_app_webhook_secret = trimspace(var.github_app_webhook_secret) != ""
+}
+
+moved {
+  from = google_sql_user.iam_human_user[0]
+  to   = google_sql_user.iam_human_user["parada.nicolas@outlook.com"]
+}
+
+moved {
+  from = google_project_iam_member.iam_human_cloudsql_client[0]
+  to   = google_project_iam_member.iam_human_cloudsql_client["parada.nicolas@outlook.com"]
+}
+
+moved {
+  from = google_project_iam_member.iam_human_cloudsql_instance_user[0]
+  to   = google_project_iam_member.iam_human_cloudsql_instance_user["parada.nicolas@outlook.com"]
+}
+
+moved {
+  from = google_project_iam_member.iam_human_cloudsql_studio_user[0]
+  to   = google_project_iam_member.iam_human_cloudsql_studio_user["parada.nicolas@outlook.com"]
 }
 
 resource "google_project_service" "cloudresourcemanager" {
@@ -144,9 +165,9 @@ resource "google_sql_user" "app" {
 }
 
 resource "google_sql_user" "iam_human_user" {
-  count = trimspace(local.iam_db_login_user_email) != "" ? 1 : 0
+  for_each = local.iam_db_login_users
 
-  name     = local.iam_db_login_user_email
+  name     = each.value
   instance = google_sql_database_instance.main.name
   type     = "CLOUD_IAM_USER"
 }
@@ -292,27 +313,27 @@ resource "google_secret_manager_secret_iam_member" "control_plane_github_app_web
 }
 
 resource "google_project_iam_member" "iam_human_cloudsql_client" {
-  count = local.should_grant_human_db_project_roles ? 1 : 0
+  for_each = local.should_grant_human_db_project_roles ? local.iam_db_login_users : toset([])
 
   project = var.project_id
   role    = "roles/cloudsql.client"
-  member  = "user:${local.iam_db_login_user_email}"
+  member  = "user:${each.value}"
 }
 
 resource "google_project_iam_member" "iam_human_cloudsql_instance_user" {
-  count = local.should_grant_human_db_project_roles ? 1 : 0
+  for_each = local.should_grant_human_db_project_roles ? local.iam_db_login_users : toset([])
 
   project = var.project_id
   role    = "roles/cloudsql.instanceUser"
-  member  = "user:${local.iam_db_login_user_email}"
+  member  = "user:${each.value}"
 }
 
 resource "google_project_iam_member" "iam_human_cloudsql_studio_user" {
-  count = local.should_grant_human_db_project_roles ? 1 : 0
+  for_each = local.should_grant_human_db_project_roles ? local.iam_db_login_users : toset([])
 
   project = var.project_id
   role    = "roles/cloudsql.studioUser"
-  member  = "user:${local.iam_db_login_user_email}"
+  member  = "user:${each.value}"
 }
 
 resource "google_cloud_run_v2_service" "control_plane" {

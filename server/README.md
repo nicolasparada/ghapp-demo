@@ -265,11 +265,17 @@ If you later change Terraform to `ENTERPRISE_PLUS`, you must also switch to a co
 ### Cloud SQL Studio says `enable data_api_access for this instance`
 This Terraform enables Data API access (`ALLOW_DATA_API`). After applying, verify your IAM user has Cloud SQL Studio permissions (`roles/cloudsql.studioUser`) and exists as a `CLOUD_IAM_USER` on the instance.
 
+For table/query access, the server now uses a DB role model (`ghapp_readonly`). To grant read access to another IAM DB user:
+
+```sql
+GRANT ghapp_readonly TO "user@example.com";
+```
+
 ### IAM API disabled in CI (`iam.googleapis.com`)
 Enable IAM API for the project and rerun. The CI workflow now pre-enables foundational APIs, but first-time propagation can take a few minutes.
 
 ### Forbidden while applying project IAM bindings
-This Terraform stack always grants your human IAM user (`parada.nicolas@outlook.com`) Cloud SQL access roles (`cloudsql.client`, `cloudsql.instanceUser`, `cloudsql.studioUser`).
+This Terraform stack grants Cloud SQL access roles (`cloudsql.client`, `cloudsql.instanceUser`, `cloudsql.studioUser`) to every email in `local.iam_db_login_user_emails` in `server/infra/terraform/main.tf`.
 
 If apply fails with permission errors, grant the deployer service account project IAM admin rights (as documented in the CI bootstrap steps), then rerun.
 
