@@ -2,7 +2,7 @@
 <header>
   <h1>{{ .Project.Name }}</h1>
   <nav>
-    <a href="/projects/{{ .Project.Slug }}/connect" role="button" class="secondary outline">Connect repositories</a>
+    <a href="/projects/{{ .Project.Slug }}/connect" role="button" class="secondary outline">GitHub App access</a>
   </nav>
 </header>
 
@@ -11,7 +11,7 @@
   {{ range $i, $r := .Repos }}{{ if $i }} · {{ end }}<code>{{ $r }}</code>{{ end }}
 </p>
 {{ else }}
-<p class="muted">No repositories linked yet. <a href="/projects/{{ .Project.Slug }}/connect">Connect one</a>.</p>
+<p class="muted">No repositories available yet. <a href="/projects/{{ .Project.Slug }}/connect">Check GitHub App access</a>.</p>
 {{ end }}
 
 {{ if .Runs }}

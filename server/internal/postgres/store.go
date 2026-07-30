@@ -159,13 +159,12 @@ func (s *Store) GetProjectBySlug(ctx context.Context, userID int64, slug string)
 	return p, nil
 }
 
-func (s *Store) ListProjectRepos(ctx context.Context, projectID int64) ([]string, error) {
+func (s *Store) ListProjectRepos(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT repo_full_name
-		FROM project_repos
-		WHERE project_id = $1
+		SELECT DISTINCT repo_full_name
+		FROM repo_links
 		ORDER BY repo_full_name ASC
-	`, projectID)
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("list project repos: %w", err)
 	}
@@ -183,43 +182,6 @@ func (s *Store) ListProjectRepos(ctx context.Context, projectID int64) ([]string
 		return nil, fmt.Errorf("iterate project repos: %w", err)
 	}
 	return repos, nil
-}
-
-func (s *Store) ReplaceProjectRepos(ctx context.Context, projectID int64, repos []string) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin replace project repos: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `DELETE FROM project_repos WHERE project_id = $1`, projectID); err != nil {
-		return fmt.Errorf("clear project repos: %w", err)
-	}
-
-	seen := map[string]struct{}{}
-	for _, repo := range repos {
-		repo = strings.TrimSpace(repo)
-		if repo == "" {
-			continue
-		}
-		if _, ok := seen[repo]; ok {
-			continue
-		}
-		seen[repo] = struct{}{}
-
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO project_repos (project_id, repo_full_name)
-			VALUES ($1, $2)
-			ON CONFLICT (project_id, repo_full_name) DO NOTHING
-		`, projectID, repo); err != nil {
-			return fmt.Errorf("insert project repo: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit project repos: %w", err)
-	}
-	return nil
 }
 
 func (s *Store) ListAvailableRepoLinks(ctx context.Context) ([]types.RepoLink, error) {
@@ -263,7 +225,7 @@ func (s *Store) ListAvailableRepoLinks(ctx context.Context) ([]types.RepoLink, e
 	return links, nil
 }
 
-func (s *Store) ListRunsForProject(ctx context.Context, projectID int64, limit int) ([]types.Run, error) {
+func (s *Store) ListRunsForProject(ctx context.Context, limit int) ([]types.Run, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -285,11 +247,14 @@ func (s *Store) ListRunsForProject(ctx context.Context, projectID int64, limit i
 			r.egress_json,
 			r.created_at
 		FROM runs r
-		JOIN project_repos pr ON pr.repo_full_name = r.repo_full_name
-		WHERE pr.project_id = $1
+		WHERE EXISTS (
+			SELECT 1
+			FROM repo_links rl
+			WHERE rl.repo_full_name = r.repo_full_name
+		)
 		ORDER BY r.created_at DESC
-		LIMIT $2
-	`, projectID, limit)
+		LIMIT $1
+	`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list runs for project: %w", err)
 	}
@@ -309,7 +274,7 @@ func (s *Store) ListRunsForProject(ctx context.Context, projectID int64, limit i
 	return runs, nil
 }
 
-func (s *Store) GetRunForProject(ctx context.Context, projectID, runID int64) (types.Run, error) {
+func (s *Store) GetRunForProject(ctx context.Context, runID int64) (types.Run, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT
 			r.id,
@@ -327,9 +292,13 @@ func (s *Store) GetRunForProject(ctx context.Context, projectID, runID int64) (t
 			r.egress_json,
 			r.created_at
 		FROM runs r
-		JOIN project_repos pr ON pr.repo_full_name = r.repo_full_name
-		WHERE pr.project_id = $1 AND r.id = $2
-	`, projectID, runID)
+		WHERE r.id = $1
+		AND EXISTS (
+			SELECT 1
+			FROM repo_links rl
+			WHERE rl.repo_full_name = r.repo_full_name
+		)
+	`, runID)
 
 	run, err := scanRun(row)
 	if err != nil {

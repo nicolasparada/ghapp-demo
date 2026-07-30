@@ -65,7 +65,6 @@ type connectData struct {
 	pageData
 	Project              types.Project
 	RepoLinks            []types.RepoLink
-	SelectedRepos        map[string]bool
 	GitHubAppInstallURL  string
 	GitHubAppSettingsURL string
 }
@@ -220,7 +219,6 @@ func (a *Server) Routes() http.Handler {
 	mux.Handle("GET /projects/{slug}", a.requireUser(http.HandlerFunc(a.handleProject)))
 	mux.Handle("GET /projects/{slug}/runs/{runID}", a.requireUser(http.HandlerFunc(a.handleRunDetail)))
 	mux.Handle("GET /projects/{slug}/connect", a.requireUser(http.HandlerFunc(a.handleConnectReposPage)))
-	mux.Handle("POST /projects/{slug}/connect", a.requireUser(http.HandlerFunc(a.handleConnectReposSubmit)))
 
 	if a.githubAppService != nil {
 		mux.HandleFunc("POST /webhooks/github", a.githubAppService.HandleWebhook)
@@ -449,13 +447,13 @@ func (a *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repos, err := a.store.ListProjectRepos(r.Context(), project.ID)
+	repos, err := a.store.ListProjectRepos(r.Context())
 	if err != nil {
 		a.renderError(w, http.StatusInternalServerError, "failed to list project repositories")
 		return
 	}
 
-	runs, err := a.store.ListRunsForProject(r.Context(), project.ID, 100)
+	runs, err := a.store.ListRunsForProject(r.Context(), 100)
 	if err != nil {
 		a.renderError(w, http.StatusInternalServerError, "failed to list runs")
 		return
@@ -495,7 +493,7 @@ func (a *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := a.store.GetRunForProject(r.Context(), project.ID, runID)
+	run, err := a.store.GetRunForProject(r.Context(), runID)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			a.renderError(w, http.StatusNotFound, "run not found")
@@ -540,59 +538,16 @@ func (a *Server) handleConnectReposPage(w http.ResponseWriter, r *http.Request) 
 		a.renderError(w, http.StatusInternalServerError, "failed to list repositories")
 		return
 	}
-	selectedRepos, err := a.store.ListProjectRepos(r.Context(), project.ID)
-	if err != nil {
-		a.renderError(w, http.StatusInternalServerError, "failed to list selected repositories")
-		return
-	}
-
-	selected := make(map[string]bool, len(selectedRepos))
-	for _, repo := range selectedRepos {
-		selected[repo] = true
-	}
-
 	if err := a.renderer.Render(w, "connect.html", connectData{
 		pageData:             pageData{Title: "Connect repositories", CurrentUser: user},
 		Project:              project,
 		RepoLinks:            repoLinks,
-		SelectedRepos:        selected,
 		GitHubAppInstallURL:  a.cfg.GitHubAppInstallURL,
 		GitHubAppSettingsURL: configuredGitHubAppSettingsURL(a.cfg.GitHubAppSettingsURL, a.cfg.GitHubAppInstallURL),
 	}); err != nil {
 		a.renderError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-}
-
-func (a *Server) handleConnectReposSubmit(w http.ResponseWriter, r *http.Request) {
-	user, err := a.userFromRequest(r)
-	if err != nil {
-		a.renderError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	project, err := a.projectFromPath(r, user.ID)
-	if err != nil {
-		if errors.Is(err, postgres.ErrNotFound) {
-			a.renderError(w, http.StatusNotFound, "project not found")
-			return
-		}
-		a.renderError(w, http.StatusInternalServerError, "failed to load project")
-		return
-	}
-
-	if err := r.ParseForm(); err != nil {
-		a.renderError(w, http.StatusBadRequest, "invalid form")
-		return
-	}
-
-	repos := r.Form["repos"]
-	if err := a.store.ReplaceProjectRepos(r.Context(), project.ID, repos); err != nil {
-		a.renderError(w, http.StatusInternalServerError, "failed to save repositories")
-		return
-	}
-
-	http.Redirect(w, r, "/projects/"+project.Slug, http.StatusSeeOther)
 }
 
 func (a *Server) handleRunsToken(w http.ResponseWriter, r *http.Request) {

@@ -61,7 +61,7 @@ GITHUB_CLIENT_SECRET=
 GITHUB_APP_ID=
 GITHUB_APP_PRIVATE_KEY=
 GITHUB_APP_WEBHOOK_SECRET=
-# Optional: used by "Connect repositories" page buttons
+# Optional: used by "GitHub App access" page buttons
 GITHUB_APP_SLUG=<your-app-slug>
 
 # OIDC verification (defaults shown)
@@ -134,10 +134,11 @@ After creating the app:
 - generate/download a **Private key** (`.pem`) → `GITHUB_APP_PRIVATE_KEY`
 
 ### Install the app
-Install the app into the user/org and selected repos you want to monitor.
+Install the app into the user/org and configure repository access in GitHub (selected repos or all repos).
 
 The server uses webhook events to populate `installations` and `repo_links`.
-A repo must be present in `repo_links` to be accepted by `/runs/token` and `/runs`.
+Those GitHub App permissions are the source of truth for repository access in the UI and for `/runs/token` and `/runs`.
+There is no separate repository-selection step in this app.
 
 ---
 

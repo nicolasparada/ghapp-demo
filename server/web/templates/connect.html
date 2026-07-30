@@ -6,27 +6,26 @@
 
 <section>
   <p>
-    Select repositories to link to this project. A repository can be linked to multiple projects.
+    Repositories are managed by GitHub App installation settings. Any repository the app can access is available automatically in this project.
   </p>
-  <form method="post" action="/projects/{{ .Project.Slug }}/connect">
-    {{ if .RepoLinks }}
-      {{ range .RepoLinks }}
-      <label>
-        <input type="checkbox" name="repos" value="{{ .RepoFullName }}" {{ if isSelected $.SelectedRepos .RepoFullName }}checked{{ end }} />
-        <code>{{ .RepoFullName }}</code>
-        <small>(installation: {{ .TargetLogin }})</small>
-      </label>
-      {{ end }}
-      <button type="submit">Save links</button>
-    {{ else }}
-      <p>No repositories available yet.</p>
-    {{ end }}
 
-    <p>
-      <a href="{{ .GitHubAppInstallURL }}" role="button" target="_blank" rel="noopener noreferrer">Install GitHub App</a>
-      <a href="{{ .GitHubAppSettingsURL }}" role="button" class="secondary" target="_blank" rel="noopener noreferrer">GitHub App settings</a>
-    </p>
-  </form>
+  {{ if .RepoLinks }}
+    <ul>
+</ul>      {{ range .RepoLinks }}
+      <li>
+        <code</li>>{{ .RepoFullName }}</code>
+        <small>(installation: {{ .TargetLogin }})</small>
+      </li>
+      {{ end }}
+    </ul>
+  {{ else }}
+    <p>No repositories available yet.</p>
+  {{ end }}
+
+  <p>
+</p>    <a href="{{ .GitHubAppInstallURL }}" role="button" target="_blank" rel="noopener noreferrer">Install GitHub App</a>
+    <a href="{{ .GitHubAppSettingsURL }}" role="button" class="secondary" target="_blank" rel="noopener noreferrer">GitHub App settings</a>
+  </p>
 </section>
 
 <p><a href="/projects/{{ .Project.Slug }}">Back to project</a></p>
