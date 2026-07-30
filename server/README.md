@@ -376,7 +376,7 @@ gcloud iam service-accounts add-iam-policy-binding "${DEPLOYER_SA_EMAIL}" \
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_ID}/attribute.repository/${GITHUB_OWNER}/${GITHUB_REPO}"
 ```
 
-9) Compute the exact values you’ll place in GitHub secrets:
+9) Compute the exact values you’ll place in GitHub repository variables:
 
 ```sh
 GCP_WIF_PROVIDER="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_ID}/providers/${WIF_PROVIDER_ID}"
@@ -389,9 +389,11 @@ echo "GCP_WIF_PROVIDER=${GCP_WIF_PROVIDER}"
 echo "GCP_WIF_SERVICE_ACCOUNT=${GCP_WIF_SERVICE_ACCOUNT}"
 ```
 
-### B) Create GitHub repository secrets
+### B) Configure GitHub repository variables and secrets
 
-Required by workflow:
+The deploy workflow uses **repository variables for non-sensitive values** and **repository secrets only for sensitive values**.
+
+Set these **Repository Variables** (`Settings → Secrets and variables → Actions → Variables`):
 
 - `GCP_PROJECT_ID` = `ghapp-demo`
 - `GCP_REGION` = `us-central1` (or the region you chose)
@@ -399,12 +401,19 @@ Required by workflow:
 - `GCP_WIF_SERVICE_ACCOUNT` = `ghapp-deployer@ghapp-demo.iam.gserviceaccount.com`
 - `TF_STATE_BUCKET` = `ghapp-demo-tf-state` (or the bucket name you created)
 - `CONTROL_PLANE_BASE_URL` (optional for bootstrap; preferred if you already have a custom domain)
-- `GITHUB_CLIENT_ID`
-- `GITHUB_CLIENT_SECRET`
-- `GITHUB_APP_ID`
-- `GITHUB_APP_PRIVATE_KEY`
-- `GITHUB_APP_WEBHOOK_SECRET`
+- `CONTROL_PLANE_GITHUB_CLIENT_ID` (value: your GitHub OAuth client ID)
+- `CONTROL_PLANE_GITHUB_APP_ID` (value: your GitHub App ID)
 
+Set these **Repository Secrets** (`Settings → Secrets and variables → Actions → Secrets`):
+
+- `CONTROL_PLANE_GITHUB_CLIENT_SECRET`
+- `CONTROL_PLANE_GITHUB_APP_PRIVATE_KEY`
+- `CONTROL_PLANE_GITHUB_APP_WEBHOOK_SECRET`
+
+> GitHub does not allow custom variable/secret names starting with `GITHUB_`, so CI inputs use the `CONTROL_PLANE_` prefix.
+> Terraform maps these into runtime env vars expected by the app (`GITHUB_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY`, etc.).
+
+Sensitive values are written by Terraform into Secret Manager and consumed by Cloud Run via secret references.
 ### C) Run deploy
 
 Trigger workflow:

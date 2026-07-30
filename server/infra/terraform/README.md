@@ -70,7 +70,7 @@ terraform -chdir=server/infra/terraform apply -auto-approve \
 
 ## Bootstrap values needed by CI
 
-The GitHub deploy workflow requires these GCP values as repository secrets:
+The GitHub deploy workflow requires these GCP values as **repository variables**:
 
 - `GCP_PROJECT_ID`
 - `GCP_REGION`
@@ -79,7 +79,7 @@ The GitHub deploy workflow requires these GCP values as repository secrets:
 - `GCP_WIF_SERVICE_ACCOUNT`
 
 For this repository, configure WIF binding against GitHub repo `nicolasparada/ghapp-demo`.
-See `server/README.md` section **Deploy to Google Cloud Run with Terraform (CI)** for a complete step-by-step `gcloud` bootstrap guide.
+See `server/README.md` section **Deploy to Google Cloud Run with Terraform (CI)** for a complete step-by-step `gcloud` bootstrap guide, including which values are variables vs secrets.
 
 ## Notes
 
