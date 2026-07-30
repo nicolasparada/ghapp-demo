@@ -1,0 +1,8 @@
+[package]
+name = "egress-agent"
+version = "0.1.0"
+edition = "2024"
+description = "Linux-only egress monitoring agent for GitHub Actions runners"
+license = "MIT"
+
+[dependencies]

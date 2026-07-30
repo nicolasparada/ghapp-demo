@@ -1,0 +1,121 @@
+name: Release egress agent
+
+on:
+  push:
+    tags:
+      - "agent-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to create/update (example: agent-v0.1.0)"
+        required: true
+        type: string
+      target_ref:
+        description: "Git ref to build from (branch, tag, or SHA)"
+        required: false
+        default: "main"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            artifact_name: egress-agent-linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            artifact_name: egress-agent-linux-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.ref }}
+
+      - name: Install Rust target
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Install ARM64 cross-compiler
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Build release binary
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
+
+          cargo build \
+            --manifest-path agent/Cargo.toml \
+            --release \
+            --locked \
+            --target "${{ matrix.target }}"
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+
+          BIN_SOURCE="agent/target/${{ matrix.target }}/release/egress-agent"
+          BIN_NAME="${{ matrix.artifact_name }}"
+          BIN_PATH="dist/${BIN_NAME}"
+
+          cp "${BIN_SOURCE}" "${BIN_PATH}"
+          chmod +x "${BIN_PATH}"
+
+          tar -C dist -czf "dist/${BIN_NAME}.tar.gz" "${BIN_NAME}"
+          sha256sum "dist/${BIN_NAME}.tar.gz" > "dist/${BIN_NAME}.tar.gz.sha256"
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            dist/${{ matrix.artifact_name }}.tar.gz
+            dist/${{ matrix.artifact_name }}.tar.gz.sha256
+
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+            echo "target=${{ inputs.target_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "target=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_TARGET: ${{ steps.meta.outputs.target }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --title "$RELEASE_TAG" \
+              --notes "Automated egress-agent release for Linux amd64/arm64." \
+              --target "$RELEASE_TARGET"
+          fi
