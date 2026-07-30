@@ -80,9 +80,10 @@ Example pattern:
 The summary JSON includes:
 
 - metadata (timings, host, backend)
-- all captured egress events
+- all captured egress events (for debugging)
 - per-event process lineage chain (root process -> leaf process)
-- aggregated `process_lineage_tree` with direct and total egress counts
+- aggregated `lineage_tree` (`schema_version: "v2"`) with process nodes and nested egress leaves (`→ destination` style)
+- direct/total egress counts per process and first/last timestamps per egress destination
 - error and drop counters
 
 ## Releasing

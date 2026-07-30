@@ -1,135 +1,86 @@
-{{ define "lineageNodes" }}
-<ul></ul>
-  {{ range . }}
-  <li></li>
-    <details {{ if .ExpandedByDefault }}open{{ end }}></details>
-      <summary></summary>
-        {{ .Label }}
-        <small></small>
-          (direct: {{ .DirectEgress }}, total: {{ .TotalEgress }}, children: {{ .ChildCount }})
-        </small>
-      </summary>
-      {{ if .Children }}
-        {{ template "lineageNodes" .Children }}
-      {{ end }}
-    </details>
-  </li>
-  {{ end }}
-</ul>
-{{ end }}
-
 {{ define "content" }}
-<header></header>
-  <h1></h1>Run details</h1>
-  <p></p>
-    Project: <strong>{{ .Project.Name }}</strong>
-  </p>
-  <p></p>
-    <a href="/projects/{{ .Project.Slug }}">Back to project</a>
-  </p>
+<header>
+  <h1>Run details</h1>
+  <p>Project: <strong>{{ .Project.Name }}</strong></p>
+  <p><a href="/projects/{{ .Project.Slug }}">Back to project</a></p>
 </header>
 
-<section></section>
-  <h2></h2>Metadata</h2>
-  <table></table>
-    <tbody></tbody>
+<section>
+  <h2>Metadata</h2>
+  <table>
+    <tbody>
       <tr><th>ID</th><td><code>{{ .Run.ID }}</code></td></tr>
-      <tr><th></th>Repository</th><td><code>{{ .Run.RepoFullName }}</code></td></tr>
-      <tr><th></th>Commit</th><td><code>{{ .Run.CommitSHA }}</code></td></tr>
-      <tr><th></th>Workflow</th><td>{{ .Run.WorkflowName }}</td></tr>
-      <tr><th></th>Job</th><td>{{ .Run.JobName }}</td></tr>
-      <tr><th></th>Event</th><td>{{ .Run.EventName }}</td></tr>
-      <tr><th></th>Actor</th><td>{{ .Run.Actor }}</td></tr>
-      <tr><th></th>Branch/Ref</th><td><code>{{ .Run.Branch }}</code></td></tr>
-      <tr><th></th>Captured at</th><td>{{ fmtTime .Run.CreatedAt }}</td></tr>
-      <tr><th></th>Backend</th><td><code>{{ .Summary.CaptureBackend }}</code></td></tr>
-      <tr><th></th>Events</th><td>{{ .Summary.TotalEvents }}</td></tr>
+      <tr><th>Repository</th><td><code>{{ .Run.RepoFullName }}</code></td></tr>
+      <tr><th>Commit</th><td><code>{{ .Run.CommitSHA }}</code></td></tr>
+      <tr><th>Workflow</th><td>{{ .Run.WorkflowName }}</td></tr>
+      <tr><th>Job</th><td>{{ .Run.JobName }}</td></tr>
+      <tr><th>Event</th><td>{{ .Run.EventName }}</td></tr>
+      <tr><th>Actor</th><td>{{ .Run.Actor }}</td></tr>
+      <tr><th>Branch/Ref</th><td><code>{{ .Run.Branch }}</code></td></tr>
+      <tr><th>Captured at</th><td>{{ fmtTime .Run.CreatedAt }}</td></tr>
+      <tr><th>Backend</th><td><code>{{ .Summary.CaptureBackend }}</code></td></tr>
+      <tr><th>Events</th><td>{{ .Summary.TotalEvents }}</td></tr>
       <tr><th>Dropped events</th><td>{{ .Summary.DroppedEvents }}</td></tr>
       <tr><th>Dropped lines</th><td>{{ .Summary.DroppedLines }}</td></tr>
+      <tr><th>Lineage process nodes</th><td>{{ .Summary.LineageProcessNodeCount }}</td></tr>
+      <tr><th>Lineage egress nodes</th><td>{{ .Summary.LineageEgressNodeCount }}</td></tr>
     </tbody>
   </table>
 </section>
 
-<section></section>
+<section>
   <h2>Egress destinations</h2>
 
-  <h3></h3>Domains</h3>
+  <h3>Domains</h3>
   {{ if .Summary.Domains }}
-  <ul></ul>
-    {{ range .Summary.Domains }}<li><code>{{ . }}</code></li>{{ end }}
+  <ul>
+    {{ range .Summary.Domains }}
+    <li><code>{{ . }}</code></li>
+    {{ end }}
   </ul>
   {{ else }}
   <p>No domains detected.</p>
   {{ end }}
 
-  <h3></h3>IPs</h3>
+  <h3>IPs</h3>
   {{ if .Summary.IPs }}
-  <ul></ul>
-    {{ range .Summary.IPs }}<li><code>{{ . }}</code></li>{{ end }}
+  <ul>
+    {{ range .Summary.IPs }}
+    <li><code>{{ . }}</code></li>
+    {{ end }}
   </ul>
   {{ else }}
   <p>No IPs detected.</p>
   {{ end }}
 
-  <h3></h3>URLs</h3>
+  <h3>URLs</h3>
   {{ if .Summary.URLs }}
-  <ul></ul>
-    {{ range .Summary.URLs }}<li><code>{{ . }}</code></li>{{ end }}
+  <ul>
+    {{ range .Summary.URLs }}
+    <li><code>{{ . }}</code></li>
+    {{ end }}
   </ul>
   {{ else }}
   <p>No URLs detected.</p>
   {{ end }}
 </section>
 
-<section></section>
-  <h2></h2>Process lineage tree</h2>
-  {{ if .Summary.LineageRoots }}
-    {{ template "lineageNodes" .Summary.LineageRoots }}
+<section>
+  <h2>Lineage tree</h2>
+  {{ if .Summary.LineageTreeLines }}
+  <pre>{{- range .Summary.LineageTreeLines }}{{ . }}
+{{- end }}</pre>
   {{ else }}
-    <p>No lineage tree available in this run payload.</p>
-  {{ end }}
-</section>
-
-<section></section>
-  <h2>Egress events</h2>
-  {{ if .Summary.Events }}
-    {{ if .Summary.TruncatedBy }}
-      <p></p>
-        Showing first {{ len .Summary.Events }} events.
-        {{ .Summary.TruncatedBy }} additional events are not rendered in the UI.
-      </p>
-    {{ end }}
-    <table></table>
-      <thead></thead>
-        <tr></tr>
-          <th></th>Observed nanos</th>
-          <th></th>Family</th>
-          <th></th>Destination</th>
-          <th></th>Lineage path</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-        {{ range .Summary.Events }}
-        <tr></tr>
-          <td><code>{{ .ObservedNanos }}</code></td>
-          <td>{{ .Family }}</td>
-          <td><code>{{ .Destination }}</code></td>
-          <td>{{ .LineagePath }}</td>
-        </tr>
-        {{ end }}
-      </tbody>
-    </table>
-  {{ else }}
-    <p>No event rows available.</p>
+  <p>No lineage tree available.</p>
   {{ end }}
 </section>
 
 {{ if .Summary.ErrorMessages }}
-<section></section>
-  <h2></h2>Summary warnings</h2>
-  <ul></ul>
+<section>
+  <h2>Summary warnings</h2>
+  <ul>
     {{ range .Summary.ErrorMessages }}
-      <li>{{ . }}</li>
+    <li>{{ . }}</li>
     {{ end }}
   </ul>
 </section>

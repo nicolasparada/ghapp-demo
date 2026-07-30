@@ -214,6 +214,22 @@ Headers:
 
 Body:
 - The **exact** JSON payload whose SHA-256 was sent in step A.
+- Must be `schema_version: "v2"` and include `lineage_tree` (the PoC lineage-first payload shape).
+
+Minimal accepted payload shape:
+
+```json
+{
+  "schema_version": "v2",
+  "capture_backend": "bpftrace:sudo:connect-v4v6",
+  "total_events": 42,
+  "dropped_events": 0,
+  "dropped_lines": 0,
+  "errors": [],
+  "events": [],
+  "lineage_tree": []
+}
+```
 
 The server verifies:
 - upload token signature + expiry

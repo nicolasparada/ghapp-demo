@@ -7,10 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -89,43 +91,28 @@ type runDetailData struct {
 }
 
 type runSummaryView struct {
-	CaptureBackend string
-	TotalEvents    int
-	DroppedEvents  int
-	DroppedLines   int
-	ErrorMessages  []string
-	Domains        []string
-	IPs            []string
-	URLs           []string
-	LineageRoots   []lineageTreeNodeView
-	Events         []runEventRowView
-	TruncatedBy    int
-}
-
-type runEventRowView struct {
-	ObservedNanos string
-	Family        string
-	Destination   string
-	LineagePath   string
-}
-
-type lineageTreeNodeView struct {
-	Label             string
-	DirectEgress      int
-	TotalEgress       int
-	ChildCount        int
-	Children          []lineageTreeNodeView
-	ExpandedByDefault bool
+	CaptureBackend          string
+	TotalEvents             int
+	DroppedEvents           int
+	DroppedLines            int
+	ErrorMessages           []string
+	Domains                 []string
+	IPs                     []string
+	URLs                    []string
+	LineageTreeLines        []string
+	LineageProcessNodeCount int
+	LineageEgressNodeCount  int
 }
 
 type runSummaryPayload struct {
-	CaptureBackend     string               `json:"capture_backend"`
-	TotalEvents        int                  `json:"total_events"`
-	DroppedEvents      int                  `json:"dropped_events"`
-	DroppedLines       int                  `json:"dropped_lines"`
-	Errors             []string             `json:"errors"`
-	Events             []runEventPayload    `json:"events"`
-	ProcessLineageTree []lineageTreePayload `json:"process_lineage_tree"`
+	SchemaVersion  string               `json:"schema_version"`
+	CaptureBackend string               `json:"capture_backend"`
+	TotalEvents    int                  `json:"total_events"`
+	DroppedEvents  int                  `json:"dropped_events"`
+	DroppedLines   int                  `json:"dropped_lines"`
+	Errors         []string             `json:"errors"`
+	Events         []runEventPayload    `json:"events"`
+	LineageTree    []lineageTreePayload `json:"lineage_tree"`
 }
 
 type runEventPayload struct {
@@ -143,12 +130,27 @@ type lineageEventNode struct {
 }
 
 type lineageTreePayload struct {
-	PID          int64                `json:"pid"`
-	Name         string               `json:"name"`
-	Cmdline      string               `json:"cmdline"`
-	DirectEgress int                  `json:"direct_egress_events"`
-	TotalEgress  int                  `json:"total_egress_events"`
-	Children     []lineageTreePayload `json:"children"`
+	NodeType       string                 `json:"node_type"`
+	PID            int64                  `json:"pid"`
+	PPID           int64                  `json:"ppid"`
+	StartTimeTicks *uint64                `json:"start_time_ticks"`
+	Name           string                 `json:"name"`
+	Cmdline        string                 `json:"cmdline"`
+	Exe            string                 `json:"exe"`
+	DirectEgress   int                    `json:"direct_egress_events"`
+	TotalEgress    int                    `json:"total_egress_events"`
+	Egress         []lineageEgressPayload `json:"egress"`
+	Children       []lineageTreePayload   `json:"children"`
+}
+
+type lineageEgressPayload struct {
+	NodeType       string `json:"node_type"`
+	Family         string `json:"family"`
+	Destination    string `json:"destination"`
+	Port           int    `json:"port"`
+	Count          int    `json:"count"`
+	FirstUnixNanos uint64 `json:"first_unix_nanos"`
+	LastUnixNanos  uint64 `json:"last_unix_nanos"`
 }
 
 type runTokenRequest struct {
@@ -519,7 +521,7 @@ func (a *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary := buildRunSummaryView(run.EgressJSON)
+	summary := buildRunSummaryView(run)
 
 	if err := a.renderer.Render(w, "run.html", runDetailData{
 		pageData: pageData{Title: "Run details", CurrentUser: user},
@@ -726,6 +728,11 @@ func (a *Server) handleRunsIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateRunSummaryPayload(body); err != nil {
+		http.Error(w, "invalid run summary payload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	actualSHA := sha256Hex(body)
 	expectedSHA, ok := normalizeSHA256Hex(claims.PayloadSHA256)
 	if !ok {
@@ -787,6 +794,26 @@ func (a *Server) handleRunsIngest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func validateRunSummaryPayload(raw []byte) error {
+	var payload runSummaryPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return fmt.Errorf("decode payload: %w", err)
+	}
+
+	schemaVersion := strings.ToLower(strings.TrimSpace(payload.SchemaVersion))
+	if schemaVersion == "" {
+		return errors.New("schema_version is required")
+	}
+	if schemaVersion != "v2" {
+		return fmt.Errorf("unsupported schema_version %q", payload.SchemaVersion)
+	}
+	if payload.LineageTree == nil {
+		return errors.New("lineage_tree field is required for v2 payload")
+	}
+
+	return nil
+}
+
 func summarizeRunForList(raw json.RawMessage) (eventCount, destinationCount, lineageNodeCount int, hasSummary bool) {
 	var payload runSummaryPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
@@ -798,10 +825,13 @@ func summarizeRunForList(raw json.RawMessage) (eventCount, destinationCount, lin
 		eventCount = len(payload.Events)
 	}
 
-	domains, ips, urls := extractEgressTargets(payload.Events)
+	domains, ips, urls := extractEgressTargetsFromTree(payload.LineageTree)
+	if len(domains)+len(ips)+len(urls) == 0 {
+		domains, ips, urls = extractEgressTargets(payload.Events)
+	}
 	destinationCount = len(domains) + len(ips) + len(urls)
 
-	lineageNodeCount = countLineageTreeNodes(payload.ProcessLineageTree)
+	lineageNodeCount = countLineageProcessNodes(payload.LineageTree) + countLineageEgressNodes(payload.LineageTree)
 	if lineageNodeCount == 0 {
 		lineageNodeCount = countLineageEventNodes(payload.Events)
 	}
@@ -809,66 +839,68 @@ func summarizeRunForList(raw json.RawMessage) (eventCount, destinationCount, lin
 	return eventCount, destinationCount, lineageNodeCount, true
 }
 
-func buildRunSummaryView(raw json.RawMessage) runSummaryView {
+func buildRunSummaryView(run types.Run) runSummaryView {
 	var payload runSummaryPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	if err := json.Unmarshal(run.EgressJSON, &payload); err != nil {
 		return runSummaryView{
 			ErrorMessages: []string{"failed to parse summary JSON: " + err.Error()},
 		}
 	}
 
-	domains, ips, urls := extractEgressTargets(payload.Events)
+	domains, ips, urls := extractEgressTargetsFromTree(payload.LineageTree)
+	if len(domains)+len(ips)+len(urls) == 0 {
+		domains, ips, urls = extractEgressTargets(payload.Events)
+	}
+
+	lineageProcessNodeCount := countLineageProcessNodes(payload.LineageTree)
+	lineageEgressNodeCount := countLineageEgressNodes(payload.LineageTree)
 
 	view := runSummaryView{
-		CaptureBackend: payload.CaptureBackend,
-		TotalEvents:    payload.TotalEvents,
-		DroppedEvents:  payload.DroppedEvents,
-		DroppedLines:   payload.DroppedLines,
-		ErrorMessages:  payload.Errors,
-		Domains:        domains,
-		IPs:            ips,
-		URLs:           urls,
-		LineageRoots:   convertLineageTree(payload.ProcessLineageTree, 0),
+		CaptureBackend:          payload.CaptureBackend,
+		TotalEvents:             payload.TotalEvents,
+		DroppedEvents:           payload.DroppedEvents,
+		DroppedLines:            payload.DroppedLines,
+		ErrorMessages:           payload.Errors,
+		Domains:                 domains,
+		IPs:                     ips,
+		URLs:                    urls,
+		LineageTreeLines:        renderLineageTreeLines(formatRunLineageRootLabel(run), payload.LineageTree),
+		LineageProcessNodeCount: lineageProcessNodeCount,
+		LineageEgressNodeCount:  lineageEgressNodeCount,
 	}
 
 	if view.TotalEvents <= 0 {
 		view.TotalEvents = len(payload.Events)
 	}
 
-	const maxEventsToRender = 300
-	eventLimit := len(payload.Events)
-	if eventLimit > maxEventsToRender {
-		view.TruncatedBy = eventLimit - maxEventsToRender
-		eventLimit = maxEventsToRender
-	}
-
-	rows := make([]runEventRowView, 0, eventLimit)
-	for i := 0; i < eventLimit; i++ {
-		event := payload.Events[i]
-		observed := "-"
-		if event.UnixNanos > 0 {
-			observed = strconv.FormatUint(event.UnixNanos, 10)
-		}
-
-		family := strings.TrimSpace(event.Family)
-		if family == "" {
-			family = "unknown"
-		}
-
-		rows = append(rows, runEventRowView{
-			ObservedNanos: observed,
-			Family:        family,
-			Destination:   formatEventDestination(event),
-			LineagePath:   formatLineagePath(event.Lineage),
-		})
-	}
-	view.Events = rows
-
-	if len(view.LineageRoots) == 0 {
-		view.ErrorMessages = append(view.ErrorMessages, "process lineage tree not present in this run payload")
+	if len(payload.LineageTree) == 0 {
+		view.ErrorMessages = append(view.ErrorMessages, "lineage tree not present in this run payload")
 	}
 
 	return view
+}
+
+func extractEgressTargetsFromTree(roots []lineageTreePayload) (domains, ips, urls []string) {
+	domainSet := map[string]struct{}{}
+	ipSet := map[string]struct{}{}
+	urlSet := map[string]struct{}{}
+
+	collectLineageEgress(roots, func(egress lineageEgressPayload) {
+		classifyEgressValue(egress.Destination, domainSet, ipSet, urlSet, &domains, &ips, &urls)
+	})
+
+	return domains, ips, urls
+}
+
+func collectLineageEgress(roots []lineageTreePayload, onEgress func(egress lineageEgressPayload)) {
+	for _, node := range roots {
+		for _, egress := range node.Egress {
+			onEgress(egress)
+		}
+		if len(node.Children) > 0 {
+			collectLineageEgress(node.Children, onEgress)
+		}
+	}
 }
 
 func extractEgressTargets(events []runEventPayload) (domains, ips, urls []string) {
@@ -996,39 +1028,146 @@ func isLikelyDomain(host string) bool {
 	return domainPattern.MatchString(host)
 }
 
-func formatEventDestination(event runEventPayload) string {
-	destination := strings.TrimSpace(event.Destination)
-	if destination == "" {
-		return "unknown"
+func formatRunLineageRootLabel(run types.Run) string {
+	workflow := strings.TrimSpace(run.WorkflowName)
+	job := strings.TrimSpace(run.JobName)
+
+	switch {
+	case workflow != "" && job != "":
+		return workflow + " · " + job
+	case workflow != "":
+		return workflow
+	case job != "":
+		return job
+	default:
+		return run.RepoFullName
 	}
-	if event.Port > 0 && strings.Count(destination, ":") == 0 {
-		return destination + ":" + strconv.Itoa(event.Port)
-	}
-	return destination
 }
 
-func formatLineagePath(nodes []lineageEventNode) string {
-	if len(nodes) == 0 {
-		return "unknown"
+func renderLineageTreeLines(rootLabel string, roots []lineageTreePayload) []string {
+	label := strings.TrimSpace(rootLabel)
+	if label == "" {
+		label = "run"
 	}
-	parts := make([]string, 0, len(nodes))
-	for _, node := range nodes {
-		label := strings.TrimSpace(node.Name)
-		if label == "" {
-			label = "pid " + strconv.FormatInt(node.PID, 10)
-		} else if node.PID > 0 {
-			label = label + " (pid " + strconv.FormatInt(node.PID, 10) + ")"
+
+	lines := []string{label}
+	if len(roots) == 0 {
+		return lines
+	}
+
+	for i, node := range roots {
+		appendLineageProcessLines(&lines, "", node, i == len(roots)-1)
+	}
+
+	return lines
+}
+
+func appendLineageProcessLines(lines *[]string, base string, node lineageTreePayload, isLast bool) {
+	linePrefix, nextBase := treeBranch(base, isLast)
+	*lines = append(*lines, linePrefix+processNodeDisplayLabel(node))
+
+	childCount := len(node.Children) + len(node.Egress)
+	childIndex := 0
+
+	for _, child := range node.Children {
+		childIndex++
+		appendLineageProcessLines(lines, nextBase, child, childIndex == childCount)
+	}
+
+	for _, egress := range node.Egress {
+		childIndex++
+		egressPrefix, _ := treeBranch(nextBase, childIndex == childCount)
+		*lines = append(*lines, egressPrefix+formatEgressLineLabel(egress))
+	}
+}
+
+func treeBranch(base string, isLast bool) (linePrefix, nextBase string) {
+	if isLast {
+		return base + "└─ ", base + "   "
+	}
+	return base + "├─ ", base + "│  "
+}
+
+func processNodeDisplayLabel(node lineageTreePayload) string {
+	name := strings.TrimSpace(node.Name)
+	cmdline := strings.TrimSpace(node.Cmdline)
+
+	if cmdline != "" {
+		parts := strings.Fields(cmdline)
+		if len(parts) > 1 {
+			first := strings.ToLower(filepath.Base(parts[0]))
+			if strings.HasPrefix(first, "python") || strings.HasPrefix(first, "bash") || strings.HasPrefix(first, "sh") || strings.HasPrefix(first, "node") || strings.HasPrefix(first, "ruby") {
+				for _, arg := range parts[1:] {
+					arg = strings.TrimSpace(arg)
+					if arg == "" || strings.HasPrefix(arg, "-") {
+						continue
+					}
+					script := filepath.Base(arg)
+					if script != "" && script != "-" {
+						return script
+					}
+				}
+			}
 		}
-		parts = append(parts, label)
+		if len(parts) > 0 {
+			entry := filepath.Base(parts[0])
+			if entry != "" {
+				return entry
+			}
+		}
 	}
-	return strings.Join(parts, " -> ")
+
+	if name != "" {
+		return name
+	}
+	if node.PID > 0 {
+		return "pid " + strconv.FormatInt(node.PID, 10)
+	}
+	return "process"
 }
 
-func countLineageTreeNodes(nodes []lineageTreePayload) int {
+func formatEgressLineLabel(egress lineageEgressPayload) string {
+	target := formatEgressTargetLabel(egress)
+	if egress.Count > 1 {
+		return "→ " + target + " ×" + strconv.Itoa(egress.Count)
+	}
+	return "→ " + target
+}
+
+func formatEgressTargetLabel(egress lineageEgressPayload) string {
+	host := normalizeHost(egress.Destination)
+	if host == "" {
+		host = strings.TrimSpace(egress.Destination)
+	}
+	if host == "" {
+		host = "unknown"
+	}
+
+	if isLocalhostHost(host) && egress.Port == 53 {
+		return "localhost (dns resolver)"
+	}
+	return host
+}
+
+func isLocalhostHost(host string) bool {
+	h := strings.TrimSpace(strings.ToLower(host))
+	return h == "localhost" || h == "127.0.0.1" || h == "127.0.0.53" || h == "::1"
+}
+
+func countLineageProcessNodes(nodes []lineageTreePayload) int {
 	total := 0
 	for _, node := range nodes {
 		total++
-		total += countLineageTreeNodes(node.Children)
+		total += countLineageProcessNodes(node.Children)
+	}
+	return total
+}
+
+func countLineageEgressNodes(nodes []lineageTreePayload) int {
+	total := 0
+	for _, node := range nodes {
+		total += len(node.Egress)
+		total += countLineageEgressNodes(node.Children)
 	}
 	return total
 }
@@ -1042,36 +1181,6 @@ func countLineageEventNodes(events []runEventPayload) int {
 		}
 	}
 	return len(seen)
-}
-
-func convertLineageTree(nodes []lineageTreePayload, depth int) []lineageTreeNodeView {
-	if len(nodes) == 0 {
-		return nil
-	}
-
-	views := make([]lineageTreeNodeView, 0, len(nodes))
-	for _, node := range nodes {
-		label := strings.TrimSpace(node.Name)
-		if label == "" {
-			label = "pid " + strconv.FormatInt(node.PID, 10)
-		} else {
-			label = label + " (pid " + strconv.FormatInt(node.PID, 10) + ")"
-		}
-		if cmdline := strings.TrimSpace(node.Cmdline); cmdline != "" && cmdline != strings.TrimSpace(node.Name) {
-			label = label + " — " + cmdline
-		}
-
-		children := convertLineageTree(node.Children, depth+1)
-		views = append(views, lineageTreeNodeView{
-			Label:             label,
-			DirectEgress:      node.DirectEgress,
-			TotalEgress:       node.TotalEgress,
-			ChildCount:        len(children),
-			Children:          children,
-			ExpandedByDefault: depth < 1,
-		})
-	}
-	return views
 }
 
 func (a *Server) renderError(w http.ResponseWriter, status int, message string) {

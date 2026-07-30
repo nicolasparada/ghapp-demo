@@ -260,8 +260,11 @@ tracepoint:syscalls:sys_enter_connect
                     match b.recv_message(Duration::from_millis(200)) {
                         Ok(CaptureMessage::StdoutLine(line)) => match parse_capture_line(&line) {
                             ParsedLine::Event(raw) => {
-                                let lineage =
+                                let mut lineage =
                                     process_cache.lineage_for_pid(raw.pid, MAX_LINEAGE_DEPTH);
+                                if lineage.is_empty() {
+                                    lineage = fallback_lineage_for_event(raw.pid, &raw.comm);
+                                }
                                 let event = EgressEvent {
                                     unix_nanos: raw.unix_nanos,
                                     pid: raw.pid,
@@ -347,7 +350,11 @@ tracepoint:syscalls:sys_enter_connect
                 match next_message {
                     Ok(CaptureMessage::StdoutLine(line)) => match parse_capture_line(&line) {
                         ParsedLine::Event(raw) => {
-                            let lineage = process_cache.lineage_for_pid(raw.pid, MAX_LINEAGE_DEPTH);
+                            let mut lineage =
+                                process_cache.lineage_for_pid(raw.pid, MAX_LINEAGE_DEPTH);
+                            if lineage.is_empty() {
+                                lineage = fallback_lineage_for_event(raw.pid, &raw.comm);
+                            }
                             let event = EgressEvent {
                                 unix_nanos: raw.unix_nanos,
                                 pid: raw.pid,
@@ -383,10 +390,10 @@ tracepoint:syscalls:sys_enter_connect
         let finished_unix_nanos = unix_now_nanos();
         let duration_millis = started_at.elapsed().as_millis();
 
-        let process_lineage_tree = build_process_lineage_tree(&events);
+        let lineage_tree = build_process_lineage_tree(&events);
 
         let summary = RunSummary {
-            schema_version: String::from("v1"),
+            schema_version: String::from("v2"),
             agent_name: String::from("egress-agent"),
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
             started_unix_nanos,
@@ -402,7 +409,7 @@ tracepoint:syscalls:sys_enter_connect
             dropped_lines,
             errors: run_errors,
             events,
-            process_lineage_tree,
+            lineage_tree,
         };
 
         write_summary_json(&cfg.output_path, &summary)
@@ -1148,6 +1155,28 @@ tracepoint:syscalls:sys_enter_connect
             .and_then(|v| v.parse::<u64>().ok())
     }
 
+    fn fallback_lineage_for_event(pid: u32, comm: &str) -> Vec<ProcessInfo> {
+        let name = {
+            let trimmed = comm.trim();
+            if trimmed.is_empty() {
+                String::from("unknown")
+            } else {
+                trimmed.to_string()
+            }
+        };
+
+        vec![ProcessInfo {
+            key: ProcessKey {
+                pid,
+                start_time_ticks: None,
+            },
+            ppid: 0,
+            name: name.clone(),
+            cmdline: name,
+            exe: String::new(),
+        }]
+    }
+
     #[derive(Debug, Clone)]
     struct EgressEvent {
         unix_nanos: u64,
@@ -1161,6 +1190,16 @@ tracepoint:syscalls:sys_enter_connect
     }
 
     #[derive(Debug, Clone)]
+    struct EgressDestinationNode {
+        family: String,
+        destination: String,
+        port: u16,
+        count: u64,
+        first_unix_nanos: u64,
+        last_unix_nanos: u64,
+    }
+
+    #[derive(Debug, Clone)]
     struct ProcessTreeNode {
         key: ProcessKey,
         ppid: u32,
@@ -1169,6 +1208,7 @@ tracepoint:syscalls:sys_enter_connect
         exe: String,
         direct_egress_events: u64,
         total_egress_events: u64,
+        egress: Vec<EgressDestinationNode>,
         children: Vec<ProcessTreeNode>,
     }
 
@@ -1184,6 +1224,8 @@ tracepoint:syscalls:sys_enter_connect
             direct: u64,
             total: u64,
             child_keys: Vec<ProcessKey>,
+            egress: Vec<EgressDestinationNode>,
+            egress_index: HashMap<String, usize>,
         }
 
         let mut flat: HashMap<ProcessKey, FlatNode> = HashMap::new();
@@ -1211,6 +1253,8 @@ tracepoint:syscalls:sys_enter_connect
                     direct: 0,
                     total: 0,
                     child_keys: Vec::new(),
+                    egress: Vec::new(),
+                    egress_index: HashMap::new(),
                 });
 
                 entry.total = entry.total.saturating_add(1);
@@ -1220,6 +1264,36 @@ tracepoint:syscalls:sys_enter_connect
 
                 if entry.parent_key.is_none() {
                     entry.parent_key = parent_key;
+                }
+            }
+
+            if let Some(leaf) = event.lineage.last()
+                && let Some(leaf_node) = flat.get_mut(&leaf.key)
+            {
+                let egress_key = format!("{}|{}|{}", event.family, event.destination, event.port);
+                if let Some(idx) = leaf_node.egress_index.get(&egress_key).copied() {
+                    if let Some(existing) = leaf_node.egress.get_mut(idx) {
+                        existing.count = existing.count.saturating_add(1);
+                        if existing.first_unix_nanos == 0
+                            || event.unix_nanos < existing.first_unix_nanos
+                        {
+                            existing.first_unix_nanos = event.unix_nanos;
+                        }
+                        if event.unix_nanos > existing.last_unix_nanos {
+                            existing.last_unix_nanos = event.unix_nanos;
+                        }
+                    }
+                } else {
+                    let idx = leaf_node.egress.len();
+                    leaf_node.egress.push(EgressDestinationNode {
+                        family: event.family.clone(),
+                        destination: event.destination.clone(),
+                        port: event.port,
+                        count: 1,
+                        first_unix_nanos: event.unix_nanos,
+                        last_unix_nanos: event.unix_nanos,
+                    });
+                    leaf_node.egress_index.insert(egress_key, idx);
                 }
             }
         }
@@ -1249,6 +1323,15 @@ tracepoint:syscalls:sys_enter_connect
             });
         }
 
+        fn sort_egress_for_output(egress: &mut [EgressDestinationNode]) {
+            egress.sort_by(|a, b| {
+                b.count
+                    .cmp(&a.count)
+                    .then_with(|| a.destination.cmp(&b.destination))
+                    .then_with(|| a.port.cmp(&b.port))
+            });
+        }
+
         fn build_node(
             key: &ProcessKey,
             flat: &HashMap<ProcessKey, FlatNode>,
@@ -1262,6 +1345,9 @@ tracepoint:syscalls:sys_enter_connect
                 .filter_map(|child_key| build_node(child_key, flat))
                 .collect();
 
+            let mut egress = node.egress.clone();
+            sort_egress_for_output(&mut egress);
+
             Some(ProcessTreeNode {
                 key: node.key.clone(),
                 ppid: node.ppid,
@@ -1270,6 +1356,7 @@ tracepoint:syscalls:sys_enter_connect
                 exe: node.exe.clone(),
                 direct_egress_events: node.direct,
                 total_egress_events: node.total,
+                egress,
                 children,
             })
         }
@@ -1312,7 +1399,7 @@ tracepoint:syscalls:sys_enter_connect
         dropped_lines: usize,
         errors: Vec<String>,
         events: Vec<EgressEvent>,
-        process_lineage_tree: Vec<ProcessTreeNode>,
+        lineage_tree: Vec<ProcessTreeNode>,
     }
 
     fn write_summary_json(path: &Path, summary: &RunSummary) -> io::Result<()> {
@@ -1416,10 +1503,10 @@ tracepoint:syscalls:sys_enter_connect
         writer.write_all(b"],\n")?;
 
         indent(&mut writer, 1)?;
-        writer.write_all(b"\"process_lineage_tree\": [\n")?;
-        for (idx, root) in summary.process_lineage_tree.iter().enumerate() {
+        writer.write_all(b"\"lineage_tree\": [\n")?;
+        for (idx, root) in summary.lineage_tree.iter().enumerate() {
             write_process_tree_json(&mut writer, root, 2)?;
-            if idx + 1 != summary.process_lineage_tree.len() {
+            if idx + 1 != summary.lineage_tree.len() {
                 writer.write_all(b",")?;
             }
             writer.write_all(b"\n")?;
@@ -1500,6 +1587,7 @@ tracepoint:syscalls:sys_enter_connect
         indent(writer, indent_level)?;
         writer.write_all(b"{\n")?;
 
+        write_kv_string(writer, indent_level + 1, "node_type", "process", true)?;
         write_kv_u32(writer, indent_level + 1, "pid", node.key.pid, true)?;
         write_kv_u32(writer, indent_level + 1, "ppid", node.ppid, true)?;
 
@@ -1531,6 +1619,18 @@ tracepoint:syscalls:sys_enter_connect
         )?;
 
         indent(writer, indent_level + 1)?;
+        writer.write_all(b"\"egress\": [\n")?;
+        for (idx, egress) in node.egress.iter().enumerate() {
+            write_egress_node_json(writer, egress, indent_level + 2)?;
+            if idx + 1 != node.egress.len() {
+                writer.write_all(b",")?;
+            }
+            writer.write_all(b"\n")?;
+        }
+        indent(writer, indent_level + 1)?;
+        writer.write_all(b"],\n")?;
+
+        indent(writer, indent_level + 1)?;
         writer.write_all(b"\"children\": [\n")?;
         for (idx, child) in node.children.iter().enumerate() {
             write_process_tree_json(writer, child, indent_level + 2)?;
@@ -1541,6 +1641,44 @@ tracepoint:syscalls:sys_enter_connect
         }
         indent(writer, indent_level + 1)?;
         writer.write_all(b"]\n")?;
+
+        indent(writer, indent_level)?;
+        writer.write_all(b"}")
+    }
+
+    fn write_egress_node_json<W: Write>(
+        writer: &mut W,
+        node: &EgressDestinationNode,
+        indent_level: usize,
+    ) -> io::Result<()> {
+        indent(writer, indent_level)?;
+        writer.write_all(b"{\n")?;
+
+        write_kv_string(writer, indent_level + 1, "node_type", "egress", true)?;
+        write_kv_string(writer, indent_level + 1, "family", &node.family, true)?;
+        write_kv_string(
+            writer,
+            indent_level + 1,
+            "destination",
+            &node.destination,
+            true,
+        )?;
+        write_kv_u16(writer, indent_level + 1, "port", node.port, true)?;
+        write_kv_u64(writer, indent_level + 1, "count", node.count, true)?;
+        write_kv_u64(
+            writer,
+            indent_level + 1,
+            "first_unix_nanos",
+            node.first_unix_nanos,
+            true,
+        )?;
+        write_kv_u64(
+            writer,
+            indent_level + 1,
+            "last_unix_nanos",
+            node.last_unix_nanos,
+            false,
+        )?;
 
         indent(writer, indent_level)?;
         writer.write_all(b"}")
