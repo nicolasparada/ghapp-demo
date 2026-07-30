@@ -31,20 +31,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Build agent binary for local smoke run
-        run: |
-          set -euo pipefail
-          cargo -C agent build --release
-
-      - name: Seed local action agent cache (skip release download dependency)
-        run: |
-          set -euo pipefail
-          CACHE_DIR="${RUNNER_TEMP}/ghapp-egress-agent/bin/nicolasparada-ghapp-demo/latest/latest/amd64"
-          mkdir -p "${CACHE_DIR}"
-          cp agent/target/release/egress-agent "${CACHE_DIR}/egress-agent-linux-amd64"
-          chmod +x "${CACHE_DIR}/egress-agent-linux-amd64"
-          echo "Seeded cache at ${CACHE_DIR}"
-
       - name: Start action under test
         uses: ./
         with:
