@@ -108,14 +108,16 @@ jobs:
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
           RELEASE_TARGET: ${{ steps.meta.outputs.target }}
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --clobber
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GH_REPO"
           else
             gh release create "$RELEASE_TAG" dist/* \
               --title "$RELEASE_TAG" \
               --notes "Automated egress-agent release for Linux amd64/arm64." \
-              --target "$RELEASE_TARGET"
+              --target "$RELEASE_TARGET" \
+              --repo "$GH_REPO"
           fi
