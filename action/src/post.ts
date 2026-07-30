@@ -1,4 +1,4 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { access, appendFile, constants, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import {
   STATE_AGENT_PID,
@@ -72,6 +72,7 @@ async function stopAgentIfRunning(): Promise<void> {
 
   const stdoutLogPath = getState(STATE_STDOUT_LOG_PATH);
   const stderrLogPath = getState(STATE_STDERR_LOG_PATH);
+  const summaryPath = getState(STATE_SUMMARY_PATH);
 
   if (isProcessRunning(pid) === false) {
     log("INFO", `agent process ${pid} already stopped`);
@@ -81,13 +82,21 @@ async function stopAgentIfRunning(): Promise<void> {
   log("INFO", `stopping egress agent pid=${pid} with SIGTERM`);
   sendSignal(pid, "SIGTERM");
 
-  const terminatedGracefully = await waitForProcessExit(pid, 15_000);
-  if (terminatedGracefully === false) {
-    log("WARN", `agent pid=${pid} did not stop after SIGTERM; sending SIGKILL`);
-    sendSignal(pid, "SIGKILL");
-    const terminatedAfterKill = await waitForProcessExit(pid, 5_000);
-    if (terminatedAfterKill === false) {
-      log("WARN", `agent pid=${pid} still appears alive after SIGKILL`);
+  const gracefulResult = await waitForProcessExitOrSummary(pid, summaryPath, 20_000);
+
+  if (gracefulResult.processExited === false) {
+    if (gracefulResult.summaryFileReady) {
+      log(
+        "INFO",
+        `summary file appeared before process exit; skipping SIGKILL to avoid truncating output (pid=${pid})`,
+      );
+    } else {
+      log("WARN", `agent pid=${pid} did not stop after SIGTERM; sending SIGKILL`);
+      sendSignal(pid, "SIGKILL");
+      const terminatedAfterKill = await waitForProcessExit(pid, 5_000);
+      if (terminatedAfterKill === false) {
+        log("WARN", `agent pid=${pid} still appears alive after SIGKILL`);
+      }
     }
   }
 
@@ -225,6 +234,43 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
     await sleep(250);
   }
   return isProcessRunning(pid) === false;
+}
+
+async function waitForProcessExitOrSummary(
+  pid: number,
+  summaryPath: string | null,
+  timeoutMs: number,
+): Promise<{ processExited: boolean; summaryFileReady: boolean }> {
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    const processExited = isProcessRunning(pid) === false;
+    const summaryFileReady = await fileExists(summaryPath);
+
+    if (processExited || summaryFileReady) {
+      return { processExited, summaryFileReady };
+    }
+
+    await sleep(250);
+  }
+
+  return {
+    processExited: isProcessRunning(pid) === false,
+    summaryFileReady: await fileExists(summaryPath),
+  };
+}
+
+async function fileExists(path: string | null): Promise<boolean> {
+  if (path === null || path === "") {
+    return false;
+  }
+
+  try {
+    await access(path, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 type ErrnoLike = Error & {

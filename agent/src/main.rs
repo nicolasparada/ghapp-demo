@@ -645,6 +645,8 @@ tracepoint:syscalls:sys_enter_connect
 
     const BACKEND_STARTUP_PROBE_TIMEOUT: Duration = Duration::from_millis(1200);
     const BACKEND_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(50);
+    const BACKEND_STOP_WAIT_TIMEOUT: Duration = Duration::from_millis(1000);
+    const BACKEND_STOP_POLL_INTERVAL: Duration = Duration::from_millis(25);
     const BACKEND_STDERR_TAIL_MAX_LINES: usize = 48;
 
     #[derive(Debug, Clone, Copy)]
@@ -695,18 +697,28 @@ tracepoint:syscalls:sys_enter_connect
                     {
                         return Err(err);
                     }
+
+                    let deadline = Instant::now() + BACKEND_STOP_WAIT_TIMEOUT;
+                    loop {
+                        match self.child.try_wait() {
+                            Ok(Some(_)) => break,
+                            Ok(None) => {
+                                if Instant::now() >= deadline {
+                                    break;
+                                }
+                                thread::sleep(BACKEND_STOP_POLL_INTERVAL);
+                            }
+                            Err(err) => return Err(err),
+                        }
+                    }
                 }
                 Err(err) => return Err(err),
             }
 
-            let _ = self.child.wait();
-
-            if let Some(join) = self.stdout_join.take() {
-                let _ = join.join();
-            }
-            if let Some(join) = self.stderr_join.take() {
-                let _ = join.join();
-            }
+            // Avoid blocking shutdown on reader threads that may still wait for EOF in edge
+            // cases (for example, inherited pipe fds from nested launchers).
+            let _ = self.stdout_join.take();
+            let _ = self.stderr_join.take();
 
             Ok(())
         }
