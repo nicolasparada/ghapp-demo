@@ -136,6 +136,12 @@ variable "github_app_id" {
   default     = ""
 }
 
+variable "github_app_install_url" {
+  description = "GitHub App installation URL shown in the control-plane UI"
+  type        = string
+  default     = "https://github.com/apps/ghapp-demo-app/installations/new"
+}
+
 variable "github_app_private_key" {
   description = "GitHub App private key PEM (optional during bootstrap; stored in Secret Manager when provided)"
   type        = string

@@ -30,9 +30,10 @@ import (
 )
 
 type Config struct {
-	BaseURL            string
-	GitHubClientID     string
-	GitHubClientSecret string
+	BaseURL             string
+	GitHubClientID      string
+	GitHubClientSecret  string
+	GitHubAppInstallURL string
 }
 
 type Server struct {
@@ -66,9 +67,10 @@ type projectData struct {
 
 type connectData struct {
 	pageData
-	Project       types.Project
-	RepoLinks     []types.RepoLink
-	SelectedRepos map[string]bool
+	Project             types.Project
+	RepoLinks           []types.RepoLink
+	SelectedRepos       map[string]bool
+	GitHubAppInstallURL string
 }
 
 type runTokenRequest struct {
@@ -424,10 +426,11 @@ func (a *Server) handleConnectReposPage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := a.renderer.Render(w, "connect.html", connectData{
-		pageData:      pageData{Title: "Connect repositories", CurrentUser: user},
-		Project:       project,
-		RepoLinks:     repoLinks,
-		SelectedRepos: selected,
+		pageData:            pageData{Title: "Connect repositories", CurrentUser: user},
+		Project:             project,
+		RepoLinks:           repoLinks,
+		SelectedRepos:       selected,
+		GitHubAppInstallURL: a.cfg.GitHubAppInstallURL,
 	}); err != nil {
 		a.renderError(w, http.StatusInternalServerError, err.Error())
 		return

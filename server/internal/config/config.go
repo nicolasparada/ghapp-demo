@@ -17,6 +17,7 @@ type Config struct {
 	GitHubAppID            string
 	GitHubAppPrivateKey    string
 	GitHubAppWebhookSecret string
+	GitHubAppInstallURL    string
 	MigrateOnly            bool
 }
 
@@ -37,6 +38,7 @@ func FromEnv() Config {
 		GitHubAppID:            os.Getenv("GITHUB_APP_ID"),
 		GitHubAppPrivateKey:    os.Getenv("GITHUB_APP_PRIVATE_KEY"),
 		GitHubAppWebhookSecret: os.Getenv("GITHUB_APP_WEBHOOK_SECRET"),
+		GitHubAppInstallURL:    getenv("GITHUB_APP_INSTALL_URL", "https://github.com/apps"),
 		MigrateOnly:            os.Getenv("MIGRATE_ONLY") == "1",
 	}
 }

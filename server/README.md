@@ -61,6 +61,8 @@ GITHUB_CLIENT_SECRET=
 GITHUB_APP_ID=
 GITHUB_APP_PRIVATE_KEY=
 GITHUB_APP_WEBHOOK_SECRET=
+# Optional: used by "Connect repositories" page install button
+GITHUB_APP_INSTALL_URL=https://github.com/apps/<your-app-slug>/installations/new
 
 # OIDC verification (defaults shown)
 OIDC_ISSUER=https://token.actions.githubusercontent.com
@@ -428,6 +430,7 @@ Set these **Repository Variables** (`Settings → Secrets and variables → Acti
 - `CONTROL_PLANE_BASE_URL` (optional for bootstrap; preferred once you know final URL/custom domain)
 - `CONTROL_PLANE_GITHUB_CLIENT_ID` (GitHub OAuth client ID)
 - `CONTROL_PLANE_GITHUB_APP_ID` (GitHub App ID)
+- `CONTROL_PLANE_GITHUB_APP_INSTALL_URL` = `https://github.com/apps/ghapp-demo-app/installations/new` (non-sensitive; controls install button target in the connect UI)
 
 Set these **Repository Secrets** (`Settings → Secrets and variables → Actions → Secrets`):
 

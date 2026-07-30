@@ -50,9 +50,10 @@ func main() {
 	}
 
 	serverHandler := webhandler.New(webhandler.Config{
-		BaseURL:            cfg.BaseURL,
-		GitHubClientID:     cfg.GitHubClientID,
-		GitHubClientSecret: cfg.GitHubClientSecret,
+		BaseURL:             cfg.BaseURL,
+		GitHubClientID:      cfg.GitHubClientID,
+		GitHubClientSecret:  cfg.GitHubClientSecret,
+		GitHubAppInstallURL: cfg.GitHubAppInstallURL,
 	}, store, renderer, githubAppService, oidcVerifier, runsTokenManager)
 
 	httpServer := &http.Server{

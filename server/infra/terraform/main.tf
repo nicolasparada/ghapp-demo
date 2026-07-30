@@ -358,6 +358,11 @@ resource "google_cloud_run_v2_service" "control_plane" {
         value = var.github_app_id
       }
 
+      env {
+        name  = "GITHUB_APP_INSTALL_URL"
+        value = var.github_app_install_url
+      }
+
       dynamic "env" {
         for_each = local.has_github_app_private_key ? [1] : []
 
