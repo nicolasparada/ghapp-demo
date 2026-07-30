@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.11.0"
+  required_version = ">= 1.11.0, < 2.0.0"
 
   required_providers {
     google = {
@@ -8,7 +8,7 @@ terraform {
     }
     random = {
       source  = "hashicorp/random"
-      version = "~> 3.7"
+      version = "~> 3.0"
     }
   }
 
