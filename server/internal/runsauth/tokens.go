@@ -140,30 +140,29 @@ func (m *TokenManager) VerifyUploadToken(rawToken string) (UploadClaims, error) 
 }
 
 func parseRSAPrivateKey(raw string) (*rsa.PrivateKey, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, errors.New("missing app private key")
+	key := strings.TrimSpace(strings.ReplaceAll(raw, `\n`, "\n"))
+	if key == "" {
+		return nil, errors.New("github app private key is required")
 	}
-	// Support keys provided with escaped newlines in env vars.
-	raw = strings.ReplaceAll(raw, `\n`, "\n")
 
-	block, _ := pem.Decode([]byte(raw))
+	block, _ := pem.Decode([]byte(key))
 	if block == nil {
-		return nil, errors.New("invalid app private key pem")
+		return nil, errors.New("github app private key must be PEM encoded")
 	}
 
-	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
-		return key, nil
+	if pkcs1, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return pkcs1, nil
 	}
 
-	parsedKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	pkcs8, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("parse app private key: %w", err)
+		return nil, fmt.Errorf("parse github app private key: %w", err)
 	}
 
-	rsaKey, ok := parsedKey.(*rsa.PrivateKey)
+	rsaKey, ok := pkcs8.(*rsa.PrivateKey)
 	if !ok {
-		return nil, errors.New("app private key is not rsa")
+		return nil, errors.New("github app private key must be an RSA private key")
 	}
+
 	return rsaKey, nil
 }

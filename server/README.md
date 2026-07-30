@@ -79,6 +79,11 @@ GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA P
 
 The server converts `\n` into real newlines automatically.
 
+If you configure this value in **GitHub repository secrets** for CI/Terraform:
+- paste the full PEM block exactly (recommended), or valid escaped-newline form
+- avoid wrapping the entire value in extra quotes in the secret UI
+- if rotating the key, bump `CONTROL_PLANE_APP_SECRETS_VERSION` so Terraform writes a new Secret Manager version
+
 ---
 
 ## 4) Configure GitHub OAuth App (for user login)
@@ -431,6 +436,7 @@ Set these **Repository Variables** (`Settings → Secrets and variables → Acti
 - `CONTROL_PLANE_GITHUB_CLIENT_ID` (GitHub OAuth client ID)
 - `CONTROL_PLANE_GITHUB_APP_ID` (GitHub App ID)
 - `CONTROL_PLANE_GITHUB_APP_INSTALL_URL` = `https://github.com/apps/ghapp-demo-app/installations/new` (non-sensitive; controls install button target in the connect UI)
+- `CONTROL_PLANE_APP_SECRETS_VERSION` (default `1`; bump to rotate GitHub app-related Secret Manager versions, e.g. `2`, `3`, ...)
 
 Set these **Repository Secrets** (`Settings → Secrets and variables → Actions → Secrets`):
 
