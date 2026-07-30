@@ -297,33 +297,75 @@ func (s *Store) ListRunsForProject(ctx context.Context, projectID int64, limit i
 
 	var runs []types.Run
 	for rows.Next() {
-		var run types.Run
-		var prNumber *int64
-		if err := rows.Scan(
-			&run.ID,
-			&run.RepoFullName,
-			&run.CommitSHA,
-			&run.WorkflowName,
-			&run.JobWorkflowRef,
-			&run.JobName,
-			&run.GitHubRunID,
-			&run.GitHubJobID,
-			&run.Branch,
-			&run.EventName,
-			&run.Actor,
-			&prNumber,
-			&run.EgressJSON,
-			&run.CreatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan run: %w", err)
+		run, err := scanRun(rows)
+		if err != nil {
+			return nil, err
 		}
-		run.PRNumber = prNumber
 		runs = append(runs, run)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate runs: %w", err)
 	}
 	return runs, nil
+}
+
+func (s *Store) GetRunForProject(ctx context.Context, projectID, runID int64) (types.Run, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			r.id,
+			r.repo_full_name,
+			r.commit_sha,
+			r.workflow_name,
+			r.job_workflow_ref,
+			r.job_name,
+			r.github_run_id,
+			r.github_job_id,
+			r.branch,
+			r.event_name,
+			r.actor,
+			r.pr_number,
+			r.egress_json,
+			r.created_at
+		FROM runs r
+		JOIN project_repos pr ON pr.repo_full_name = r.repo_full_name
+		WHERE pr.project_id = $1 AND r.id = $2
+	`, projectID, runID)
+
+	run, err := scanRun(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return types.Run{}, ErrNotFound
+		}
+		return types.Run{}, fmt.Errorf("get run for project: %w", err)
+	}
+	return run, nil
+}
+
+func scanRun(scanner interface {
+	Scan(dest ...any) error
+}) (types.Run, error) {
+	var run types.Run
+	var prNumber *int64
+	if err := scanner.Scan(
+		&run.ID,
+		&run.RepoFullName,
+		&run.CommitSHA,
+		&run.WorkflowName,
+		&run.JobWorkflowRef,
+		&run.JobName,
+		&run.GitHubRunID,
+		&run.GitHubJobID,
+		&run.Branch,
+		&run.EventName,
+		&run.Actor,
+		&prNumber,
+		&run.EgressJSON,
+		&run.CreatedAt,
+	); err != nil {
+		return types.Run{}, fmt.Errorf("scan run: %w", err)
+	}
+	run.PRNumber = prNumber
+	return run, nil
 }
 
 func (s *Store) UpsertInstallation(ctx context.Context, githubInstallationID int64, targetType, targetLogin string) (types.Installation, error) {

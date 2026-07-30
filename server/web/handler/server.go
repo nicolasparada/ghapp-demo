@@ -58,19 +58,97 @@ type dashboardData struct {
 	Projects []types.Project
 }
 
-type projectData struct {
-	pageData
-	Project types.Project
-	Repos   []string
-	Runs    []types.Run
-}
-
 type connectData struct {
 	pageData
 	Project             types.Project
 	RepoLinks           []types.RepoLink
 	SelectedRepos       map[string]bool
 	GitHubAppInstallURL string
+}
+
+type projectRunRow struct {
+	Run               types.Run
+	DestinationCount  int
+	LineageNodeCount  int
+	EventCount        int
+	HasDetailsSummary bool
+}
+
+type projectData struct {
+	pageData
+	Project types.Project
+	Repos   []string
+	Runs    []projectRunRow
+}
+
+type runDetailData struct {
+	pageData
+	Project types.Project
+	Run     types.Run
+	Summary runSummaryView
+}
+
+type runSummaryView struct {
+	CaptureBackend string
+	TotalEvents    int
+	DroppedEvents  int
+	DroppedLines   int
+	ErrorMessages  []string
+	Domains        []string
+	IPs            []string
+	URLs           []string
+	LineageRoots   []lineageTreeNodeView
+	Events         []runEventRowView
+	TruncatedBy    int
+}
+
+type runEventRowView struct {
+	ObservedNanos string
+	Family        string
+	Destination   string
+	LineagePath   string
+}
+
+type lineageTreeNodeView struct {
+	Label             string
+	DirectEgress      int
+	TotalEgress       int
+	ChildCount        int
+	Children          []lineageTreeNodeView
+	ExpandedByDefault bool
+}
+
+type runSummaryPayload struct {
+	CaptureBackend     string               `json:"capture_backend"`
+	TotalEvents        int                  `json:"total_events"`
+	DroppedEvents      int                  `json:"dropped_events"`
+	DroppedLines       int                  `json:"dropped_lines"`
+	Errors             []string             `json:"errors"`
+	Events             []runEventPayload    `json:"events"`
+	ProcessLineageTree []lineageTreePayload `json:"process_lineage_tree"`
+}
+
+type runEventPayload struct {
+	UnixNanos   uint64             `json:"unix_nanos"`
+	Family      string             `json:"family"`
+	Destination string             `json:"destination"`
+	Port        int                `json:"port"`
+	Lineage     []lineageEventNode `json:"lineage"`
+}
+
+type lineageEventNode struct {
+	PID     int64  `json:"pid"`
+	Name    string `json:"name"`
+	Cmdline string `json:"cmdline"`
+}
+
+type lineageTreePayload struct {
+	PID          int64                `json:"pid"`
+	Name         string               `json:"name"`
+	Cmdline      string               `json:"cmdline"`
+	DirectEgress int                  `json:"direct_egress_events"`
+	TotalEgress  int                  `json:"total_egress_events"`
+	Children     []lineageTreePayload `json:"children"`
 }
 
 type runTokenRequest struct {
@@ -86,6 +164,9 @@ var (
 	errMissingUserContext = errors.New("missing user in request context")
 	pullRefPattern        = regexp.MustCompile(`^refs/pull/(\d+)/(merge|head)$`)
 	sha256HexPattern      = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	ipv4Pattern           = regexp.MustCompile(`^(?:\d{1,3}\.){3}\d{1,3}$`)
+	hostPortSuffixPattern = regexp.MustCompile(`:[0-9]+$`)
+	domainPattern         = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 )
 
 func UserFromContext(ctx context.Context) *types.User {
@@ -139,6 +220,7 @@ func (a *Server) Routes() http.Handler {
 	mux.Handle("GET /dashboard", a.requireUser(http.HandlerFunc(a.handleDashboard)))
 	mux.Handle("POST /projects", a.requireUser(http.HandlerFunc(a.handleCreateProject)))
 	mux.Handle("GET /projects/{slug}", a.requireUser(http.HandlerFunc(a.handleProject)))
+	mux.Handle("GET /projects/{slug}/runs/{runID}", a.requireUser(http.HandlerFunc(a.handleRunDetail)))
 	mux.Handle("GET /projects/{slug}/connect", a.requireUser(http.HandlerFunc(a.handleConnectReposPage)))
 	mux.Handle("POST /projects/{slug}/connect", a.requireUser(http.HandlerFunc(a.handleConnectReposSubmit)))
 
@@ -381,11 +463,69 @@ func (a *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	runRows := make([]projectRunRow, 0, len(runs))
+	for _, run := range runs {
+		eventCount, destinationCount, lineageNodeCount, hasSummary := summarizeRunForList(run.EgressJSON)
+		runRows = append(runRows, projectRunRow{
+			Run:               run,
+			EventCount:        eventCount,
+			DestinationCount:  destinationCount,
+			LineageNodeCount:  lineageNodeCount,
+			HasDetailsSummary: hasSummary,
+		})
+	}
+
 	if err := a.renderer.Render(w, "project.html", projectData{
 		pageData: pageData{Title: project.Name, CurrentUser: user},
 		Project:  project,
 		Repos:    repos,
-		Runs:     runs,
+		Runs:     runRows,
+	}); err != nil {
+		a.renderError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
+func (a *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
+	user, err := a.userFromRequest(r)
+	if err != nil {
+		a.renderError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	project, err := a.projectFromPath(r, user.ID)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			a.renderError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		a.renderError(w, http.StatusInternalServerError, "failed to load project")
+		return
+	}
+
+	runID, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("runID")), 10, 64)
+	if err != nil || runID <= 0 {
+		a.renderError(w, http.StatusBadRequest, "invalid run id")
+		return
+	}
+
+	run, err := a.store.GetRunForProject(r.Context(), project.ID, runID)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			a.renderError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		a.renderError(w, http.StatusInternalServerError, "failed to load run")
+		return
+	}
+
+	summary := buildRunSummaryView(run.EgressJSON)
+
+	if err := a.renderer.Render(w, "run.html", runDetailData{
+		pageData: pageData{Title: "Run details", CurrentUser: user},
+		Project:  project,
+		Run:      run,
+		Summary:  summary,
 	}); err != nil {
 		a.renderError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -645,6 +785,293 @@ func (a *Server) handleRunsIngest(w http.ResponseWriter, r *http.Request) {
 		"repository":    claims.Repository,
 		"github_run_id": claims.RunID,
 	})
+}
+
+func summarizeRunForList(raw json.RawMessage) (eventCount, destinationCount, lineageNodeCount int, hasSummary bool) {
+	var payload runSummaryPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return 0, 0, 0, false
+	}
+
+	eventCount = payload.TotalEvents
+	if eventCount <= 0 {
+		eventCount = len(payload.Events)
+	}
+
+	domains, ips, urls := extractEgressTargets(payload.Events)
+	destinationCount = len(domains) + len(ips) + len(urls)
+
+	lineageNodeCount = countLineageTreeNodes(payload.ProcessLineageTree)
+	if lineageNodeCount == 0 {
+		lineageNodeCount = countLineageEventNodes(payload.Events)
+	}
+
+	return eventCount, destinationCount, lineageNodeCount, true
+}
+
+func buildRunSummaryView(raw json.RawMessage) runSummaryView {
+	var payload runSummaryPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return runSummaryView{
+			ErrorMessages: []string{"failed to parse summary JSON: " + err.Error()},
+		}
+	}
+
+	domains, ips, urls := extractEgressTargets(payload.Events)
+
+	view := runSummaryView{
+		CaptureBackend: payload.CaptureBackend,
+		TotalEvents:    payload.TotalEvents,
+		DroppedEvents:  payload.DroppedEvents,
+		DroppedLines:   payload.DroppedLines,
+		ErrorMessages:  payload.Errors,
+		Domains:        domains,
+		IPs:            ips,
+		URLs:           urls,
+		LineageRoots:   convertLineageTree(payload.ProcessLineageTree, 0),
+	}
+
+	if view.TotalEvents <= 0 {
+		view.TotalEvents = len(payload.Events)
+	}
+
+	const maxEventsToRender = 300
+	eventLimit := len(payload.Events)
+	if eventLimit > maxEventsToRender {
+		view.TruncatedBy = eventLimit - maxEventsToRender
+		eventLimit = maxEventsToRender
+	}
+
+	rows := make([]runEventRowView, 0, eventLimit)
+	for i := 0; i < eventLimit; i++ {
+		event := payload.Events[i]
+		observed := "-"
+		if event.UnixNanos > 0 {
+			observed = strconv.FormatUint(event.UnixNanos, 10)
+		}
+
+		family := strings.TrimSpace(event.Family)
+		if family == "" {
+			family = "unknown"
+		}
+
+		rows = append(rows, runEventRowView{
+			ObservedNanos: observed,
+			Family:        family,
+			Destination:   formatEventDestination(event),
+			LineagePath:   formatLineagePath(event.Lineage),
+		})
+	}
+	view.Events = rows
+
+	if len(view.LineageRoots) == 0 {
+		view.ErrorMessages = append(view.ErrorMessages, "process lineage tree not present in this run payload")
+	}
+
+	return view
+}
+
+func extractEgressTargets(events []runEventPayload) (domains, ips, urls []string) {
+	domainSet := map[string]struct{}{}
+	ipSet := map[string]struct{}{}
+	urlSet := map[string]struct{}{}
+
+	for _, event := range events {
+		classifyEgressValue(event.Destination, domainSet, ipSet, urlSet, &domains, &ips, &urls)
+	}
+
+	return domains, ips, urls
+}
+
+func classifyEgressValue(raw string, domainSet, ipSet, urlSet map[string]struct{}, domains, ips, urls *[]string) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return
+	}
+
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		if _, ok := urlSet[value]; !ok {
+			urlSet[value] = struct{}{}
+			*urls = append(*urls, value)
+		}
+		host := extractHostFromURL(value)
+		if host != "" {
+			classifyHost(host, domainSet, ipSet, domains, ips)
+		}
+		return
+	}
+
+	classifyHost(value, domainSet, ipSet, domains, ips)
+}
+
+func extractHostFromURL(raw string) string {
+	withoutScheme := raw
+	if idx := strings.Index(raw, "://"); idx >= 0 {
+		withoutScheme = raw[idx+3:]
+	}
+	if idx := strings.IndexAny(withoutScheme, "/?#"); idx >= 0 {
+		withoutScheme = withoutScheme[:idx]
+	}
+	if at := strings.LastIndex(withoutScheme, "@"); at >= 0 {
+		withoutScheme = withoutScheme[at+1:]
+	}
+	return normalizeHost(withoutScheme)
+}
+
+func classifyHost(raw string, domainSet, ipSet map[string]struct{}, domains, ips *[]string) {
+	host := normalizeHost(raw)
+	if host == "" {
+		return
+	}
+
+	if isLikelyIPv4(host) || isLikelyIPv6(host) {
+		if _, ok := ipSet[host]; !ok {
+			ipSet[host] = struct{}{}
+			*ips = append(*ips, host)
+		}
+		return
+	}
+
+	if isLikelyDomain(host) {
+		if _, ok := domainSet[host]; !ok {
+			domainSet[host] = struct{}{}
+			*domains = append(*domains, host)
+		}
+	}
+}
+
+func normalizeHost(raw string) string {
+	host := strings.ToLower(strings.TrimSpace(raw))
+	if host == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(host, "[") && strings.Contains(host, "]") {
+		end := strings.Index(host, "]")
+		if end > 1 {
+			return host[1:end]
+		}
+	}
+
+	if strings.Count(host, ":") == 1 && hostPortSuffixPattern.MatchString(host) {
+		host = hostPortSuffixPattern.ReplaceAllString(host, "")
+	}
+
+	host = strings.TrimSuffix(host, ".")
+	return host
+}
+
+func isLikelyIPv4(host string) bool {
+	if !ipv4Pattern.MatchString(host) {
+		return false
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 || n > 255 {
+			return false
+		}
+	}
+	return true
+}
+
+func isLikelyIPv6(host string) bool {
+	if strings.Count(host, ":") < 2 {
+		return false
+	}
+	for _, r := range host {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || r == ':' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isLikelyDomain(host string) bool {
+	return domainPattern.MatchString(host)
+}
+
+func formatEventDestination(event runEventPayload) string {
+	destination := strings.TrimSpace(event.Destination)
+	if destination == "" {
+		return "unknown"
+	}
+	if event.Port > 0 && strings.Count(destination, ":") == 0 {
+		return destination + ":" + strconv.Itoa(event.Port)
+	}
+	return destination
+}
+
+func formatLineagePath(nodes []lineageEventNode) string {
+	if len(nodes) == 0 {
+		return "unknown"
+	}
+	parts := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		label := strings.TrimSpace(node.Name)
+		if label == "" {
+			label = "pid " + strconv.FormatInt(node.PID, 10)
+		} else if node.PID > 0 {
+			label = label + " (pid " + strconv.FormatInt(node.PID, 10) + ")"
+		}
+		parts = append(parts, label)
+	}
+	return strings.Join(parts, " -> ")
+}
+
+func countLineageTreeNodes(nodes []lineageTreePayload) int {
+	total := 0
+	for _, node := range nodes {
+		total++
+		total += countLineageTreeNodes(node.Children)
+	}
+	return total
+}
+
+func countLineageEventNodes(events []runEventPayload) int {
+	seen := map[string]struct{}{}
+	for _, event := range events {
+		for _, node := range event.Lineage {
+			key := strconv.FormatInt(node.PID, 10) + ":" + strings.TrimSpace(node.Name)
+			seen[key] = struct{}{}
+		}
+	}
+	return len(seen)
+}
+
+func convertLineageTree(nodes []lineageTreePayload, depth int) []lineageTreeNodeView {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	views := make([]lineageTreeNodeView, 0, len(nodes))
+	for _, node := range nodes {
+		label := strings.TrimSpace(node.Name)
+		if label == "" {
+			label = "pid " + strconv.FormatInt(node.PID, 10)
+		} else {
+			label = label + " (pid " + strconv.FormatInt(node.PID, 10) + ")"
+		}
+		if cmdline := strings.TrimSpace(node.Cmdline); cmdline != "" && cmdline != strings.TrimSpace(node.Name) {
+			label = label + " — " + cmdline
+		}
+
+		children := convertLineageTree(node.Children, depth+1)
+		views = append(views, lineageTreeNodeView{
+			Label:             label,
+			DirectEgress:      node.DirectEgress,
+			TotalEgress:       node.TotalEgress,
+			ChildCount:        len(children),
+			Children:          children,
+			ExpandedByDefault: depth < 1,
+		})
+	}
+	return views
 }
 
 func (a *Server) renderError(w http.ResponseWriter, status int, message string) {

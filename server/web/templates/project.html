@@ -31,18 +31,28 @@
         <th>Workflow</th>
         <th>Job</th>
         <th>Event</th>
-        <th>Created</th>
+        <th>Egress</th>
+        <th></th>Created</th>
+        <th></th>Details</th>
       </tr>
     </thead>
     <tbody>
       {{ range .Runs }}
       <tr>
-        <td><code>{{ .RepoFullName }}</code></td>
-        <td><code>{{ shortSHA .CommitSHA }}</code></td>
-        <td>{{ .WorkflowName }}</td>
-        <td>{{ .JobName }}</td>
-        <td>{{ .EventName }}</td>
-        <td>{{ fmtTime .CreatedAt }}</td>
+        <td><code>{{ .Run.RepoFullName }}</code></td>
+        <td><code>{{ shortSHA .Run.CommitSHA }}</code></td>
+        <td>{{ .Run.WorkflowName }}</td>
+        <td>{{ .Run.JobName }}</td>
+        <td>{{ .Run.EventName }}</td>
+        <td>
+          {{ if .HasDetailsSummary }}
+            {{ .EventCount }} events · {{ .DestinationCount }} destinations · {{ .LineageNodeCount }} lineage nodes
+          {{ else }}
+            summary unavailable
+          {{ end }}
+        </td>
+        <td>{{ fmtTime .Run.CreatedAt }}</td>
+        <td><a href="/projects/{{ $.Project.Slug }}/runs/{{ .Run.ID }}">View</a></td>
       </tr>
       {{ end }}
     </tbody>
