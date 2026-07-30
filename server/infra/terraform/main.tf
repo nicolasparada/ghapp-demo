@@ -5,6 +5,12 @@ locals {
   database_url        = "postgres://${var.sql_database_user}:${urlencode(ephemeral.random_password.db_password.result)}@/${var.sql_database_name}?host=/cloudsql/${local.sql_connection_name}&sslmode=disable"
 }
 
+resource "google_project_service" "cloudresourcemanager" {
+  project            = var.project_id
+  service            = "cloudresourcemanager.googleapis.com"
+  disable_on_destroy = false
+}
+
 resource "google_project_service" "artifactregistry" {
   project            = var.project_id
   service            = "artifactregistry.googleapis.com"
@@ -15,18 +21,24 @@ resource "google_project_service" "run" {
   project            = var.project_id
   service            = "run.googleapis.com"
   disable_on_destroy = false
+
+  depends_on = [google_project_service.cloudresourcemanager]
 }
 
 resource "google_project_service" "sqladmin" {
   project            = var.project_id
   service            = "sqladmin.googleapis.com"
   disable_on_destroy = false
+
+  depends_on = [google_project_service.cloudresourcemanager]
 }
 
 resource "google_project_service" "secretmanager" {
   project            = var.project_id
   service            = "secretmanager.googleapis.com"
   disable_on_destroy = false
+
+  depends_on = [google_project_service.cloudresourcemanager]
 }
 
 resource "google_artifact_registry_repository" "server" {
@@ -34,7 +46,10 @@ resource "google_artifact_registry_repository" "server" {
   repository_id = var.artifact_repository_id
   format        = "DOCKER"
 
-  depends_on = [google_project_service.artifactregistry]
+  depends_on = [
+    google_project_service.cloudresourcemanager,
+    google_project_service.artifactregistry,
+  ]
 }
 
 resource "google_sql_database_instance" "main" {

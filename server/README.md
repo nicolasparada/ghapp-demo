@@ -304,13 +304,14 @@ PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(proje
 
 ```sh
 gcloud services enable \
+  cloudresourcemanager.googleapis.com \
+  serviceusage.googleapis.com \
   run.googleapis.com \
   sqladmin.googleapis.com \
   artifactregistry.googleapis.com \
   secretmanager.googleapis.com \
   iamcredentials.googleapis.com \
-  sts.googleapis.com \
-  serviceusage.googleapis.com
+  sts.googleapis.com
 ```
 
 4) Create Terraform state bucket:

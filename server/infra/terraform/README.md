@@ -6,7 +6,7 @@ This Terraform stack deploys the control-plane server on Google Cloud with:
 - **Cloud SQL for PostgreSQL** (managed Postgres)
 - **Artifact Registry** Docker repository
 - **Secret Manager** for runtime sensitive configuration
-- Required API enablement + IAM bindings
+- Required API enablement + IAM bindings (including Cloud Resource Manager bootstrap)
 
 ## Files
 

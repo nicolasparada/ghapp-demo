@@ -52,6 +52,12 @@ jobs:
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
 
+      - name: Ensure foundational APIs are enabled
+        run: |
+          gcloud services enable \
+            cloudresourcemanager.googleapis.com \
+            serviceusage.googleapis.com
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
