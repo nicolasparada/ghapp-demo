@@ -1,0 +1,23 @@
+name: GHApp egress monitor
+description: Starts the Linux egress agent in background and uploads its summary to the control-plane in post-step.
+
+author: nicolasparada
+
+inputs:
+  control_plane_base_url:
+    description: Control-plane base URL used for /runs/token and /runs upload
+    required: false
+    default: https://ghapp-control-plane-35h6b4wbbq-uc.a.run.app
+  agent_version:
+    description: Agent release tag to download (for example agent-v0.1.0). Use 'latest' for newest release.
+    required: false
+    default: latest
+
+runs:
+  using: node24
+  main: action/dist/main.js
+  post: action/dist/post.js
+
+branding:
+  color: blue
+  icon: upload-cloud

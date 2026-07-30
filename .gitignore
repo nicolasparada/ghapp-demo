@@ -2,4 +2,5 @@
 .env
 server/.env
 agent/target
+action/node_modules
 run-summary.json
