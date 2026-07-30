@@ -1,22 +1,33 @@
 {{ define "lineageNodes" }}
-<ul class="lineage-tree">
+<ul role="list" class="space-y-1">
   {{ range . }}
   <li>
-    <div class="lineage-process-row">
-      <span class="lineage-process-name">{{ .Label }}</span>
+    <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+      <span class="text-sm font-semibold break-all">{{ .Label }}</span>
       {{ if gt .TotalEgress 0 }}
-      <small class="lineage-process-meta">{{ .TotalEgress }} egress{{ if and (gt .DirectEgress 0) (ne .DirectEgress .TotalEgress) }}, {{ .DirectEgress }} direct{{ end }}</small>
+      <span class="text-xs muted">
+        {{ .TotalEgress }} egress{{ if and (gt .DirectEgress 0) (ne .DirectEgress .TotalEgress) }},
+        {{ .DirectEgress }} direct{{ end }}
+      </span>
       {{ end }}
     </div>
+
     {{ if .Egress }}
-    <ul class="lineage-egress-list">
+    <ul role="list" class="mt-1 space-y-1">
       {{ range .Egress }}
-      <li class="lineage-egress-row">
-        <code>{{ .Target }}</code>{{ if gt .Count 1 }} <small class="lineage-egress-count muted">×{{ .Count }}</small>{{ end }}
+      <li class="flex flex-wrap items-baseline gap-x-2">
+        <code class="chip break-all">{{ .Target }}</code>
+        {{ if gt .Count 1 }}
+        <span class="text-xs muted"
+          ><span aria-hidden="true">×{{ .Count }}</span
+          ><span class="sr-only">{{ .Count }} connections</span></span
+        >
+        {{ end }}
       </li>
       {{ end }}
     </ul>
     {{ end }}
+
     {{ if .Children }}{{ template "lineageNodes" .Children }}{{ end }}
   </li>
   {{ end }}
@@ -24,31 +35,126 @@
 {{ end }}
 
 {{ define "content" }}
-<header>
-  <h1>{{ .Summary.LineageRootLabel }}</h1>
-  <p>
-    <code>{{ .Run.RepoFullName }}</code>
-    <code class="sha">{{ shortSHA .Run.CommitSHA }}</code>
-    {{ if .Run.Branch }}<code>{{ .Run.Branch }}</code>{{ end }}
-    {{ if .Run.Actor }}<span class="muted">by {{ .Run.Actor }}</span>{{ end }}
-    {{ if .Run.EventName }}<span class="muted">· {{ .Run.EventName }}</span>{{ end }}
-    <span class="muted">· {{ fmtTime .Run.CreatedAt }}</span>
-  </p>
-  <p><a href="/projects/{{ .Project.Slug }}">← {{ .Project.Name }}</a></p>
-</header>
+<div class="flex flex-col gap-8">
+  <header>
+    <a
+      href="/projects/{{ .Project.Slug }}"
+      class="inline-flex items-center gap-1.5 rounded text-xs font-medium muted transition hover:text-slate-900 dark:hover:text-white"
+    >
+      <svg
+        aria-hidden="true"
+        focusable="false"
+        class="size-3.5 shrink-0"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
+        />
+      </svg>
+      {{ .Project.Name }}
+    </a>
 
-{{ if .Summary.LineageRoots }}
-  {{ template "lineageNodes" .Summary.LineageRoots }}
-{{ else }}
-<p class="muted">No lineage tree available.</p>
-{{ end }}
+    <h1 class="mt-2 text-2xl font-semibold tracking-tight break-all sm:text-3xl">
+      {{ .Summary.LineageRootLabel }}
+    </h1>
 
-{{ if .Summary.ErrorMessages }}
-<details>
-  <summary class="muted">Warnings ({{ len .Summary.ErrorMessages }})</summary>
-  <ul>
-    {{ range .Summary.ErrorMessages }}<li>{{ . }}</li>{{ end }}
-  </ul>
-</details>
-{{ end }}
+    <dl
+      class="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:flex sm:flex-wrap sm:gap-x-8"
+    >
+      <div class="col-span-2 min-w-0 sm:col-span-1">
+        <dt class="eyebrow">Repository</dt>
+        <dd class="mt-1"><code class="chip break-all">{{ .Run.RepoFullName }}</code></dd>
+      </div>
+
+      <div class="min-w-0">
+        <dt class="eyebrow">Commit</dt>
+        <dd class="mt-1"><code class="chip">{{ shortSHA .Run.CommitSHA }}</code></dd>
+      </div>
+
+      {{ if .Run.Branch }}
+      <div class="min-w-0">
+        <dt class="eyebrow">Branch</dt>
+        <dd class="mt-1"><code class="chip break-all">{{ .Run.Branch }}</code></dd>
+      </div>
+      {{ end }}
+
+      {{ if .Run.Actor }}
+      <div class="min-w-0">
+        <dt class="eyebrow">Actor</dt>
+        <dd class="mt-1 truncate">{{ .Run.Actor }}</dd>
+      </div>
+      {{ end }}
+
+      {{ if .Run.EventName }}
+      <div class="min-w-0">
+        <dt class="eyebrow">Event</dt>
+        <dd class="mt-1 truncate">{{ .Run.EventName }}</dd>
+      </div>
+      {{ end }}
+
+      <div class="min-w-0">
+        <dt class="eyebrow">Recorded</dt>
+        <dd class="mt-1">
+          <time datetime="{{ isoTime .Run.CreatedAt }}">{{ fmtTime .Run.CreatedAt }}</time>
+        </dd>
+      </div>
+    </dl>
+  </header>
+
+  <section aria-labelledby="lineage-heading" class="flex flex-col gap-3">
+    <h2 id="lineage-heading" class="text-sm font-semibold">Process lineage</h2>
+
+    {{ if .Summary.LineageRoots }}
+    <div class="card overflow-x-auto p-4 sm:p-5">
+      <div class="tree min-w-fit">
+        {{ template "lineageNodes" .Summary.LineageRoots }}
+      </div>
+    </div>
+    {{ else }}
+    <p class="card p-8 text-center text-sm text-pretty muted sm:p-10">
+      No lineage tree available for this run.
+    </p>
+    {{ end }}
+  </section>
+
+  {{ if .Summary.ErrorMessages }}
+  <section aria-labelledby="warnings-heading">
+    <h2 id="warnings-heading" class="sr-only">Warnings</h2>
+
+    <details class="card group p-4 sm:p-5">
+      <summary
+        class="flex cursor-pointer list-none items-center gap-2 rounded text-sm font-medium [&::-webkit-details-marker]:hidden"
+      >
+        <svg
+          aria-hidden="true"
+          focusable="false"
+          class="size-4 shrink-0 muted transition group-open:rotate-90"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+        </svg>
+        Warnings
+        <span class="badge">{{ len .Summary.ErrorMessages }}</span>
+      </summary>
+
+      <ul role="list" class="mt-3 space-y-1.5 border-t border-slate-100 pt-3 text-sm dark:border-slate-800">
+        {{ range .Summary.ErrorMessages }}
+        <li class="flex gap-2 muted">
+          <span aria-hidden="true" class="select-none">•</span>
+          <span class="min-w-0 wrap-break-word">{{ . }}</span>
+        </li>
+        {{ end }}
+      </ul>
+    </details>
+  </section>
+  {{ end }}
+</div>
 {{ end }}

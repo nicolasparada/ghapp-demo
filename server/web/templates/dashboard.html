@@ -1,25 +1,100 @@
 {{ define "content" }}
-<header>
-  <h1>Dashboard</h1>
-</header>
+<div class="flex flex-col gap-8">
+  <header>
+    <h1 class="text-2xl font-semibold tracking-tight sm:text-3xl">Projects</h1>
+    <p class="mt-1.5 max-w-prose text-sm text-pretty muted">
+      Group repositories and review the egress captured from their workflow
+      runs.
+    </p>
+  </header>
 
-<section>
-  <form method="post" action="/projects" style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap;">
-    <div>
-      <label for="name">New project</label>
-      <input id="name" name="name" placeholder="My project" required style="margin-bottom:0;" />
-    </div>
-    <button type="submit" style="margin-bottom:var(--pico-spacing);">Create</button>
-  </form>
-</section>
+  <section aria-labelledby="new-project-heading" class="card p-4 sm:p-5">
+    <h2 id="new-project-heading" class="eyebrow">New project</h2>
 
-{{ if .Projects }}
-<ul class="project-list">
-  {{ range .Projects }}
-  <li><a href="/projects/{{ .Slug }}">{{ .Name }}</a> <small class="muted">{{ .Slug }}</small></li>
-  {{ end }}
-</ul>
-{{ else }}
-<p class="muted">No projects yet.</p>
-{{ end }}
+    <form
+      method="post"
+      action="/projects"
+      class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-start"
+    >
+      <div class="flex-1">
+        <label for="project-name" class="label sr-only">Project name</label>
+        <input
+          id="project-name"
+          name="name"
+          type="text"
+          class="input"
+          placeholder="My project"
+          required
+          maxlength="100"
+          autocomplete="off"
+          aria-describedby="project-name-hint"
+        />
+        <p id="project-name-hint" class="mt-1.5 text-xs muted">
+          A URL slug is generated from the name automatically.
+        </p>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-full sm:w-auto">
+        <svg
+          aria-hidden="true"
+          focusable="false"
+          class="size-4 shrink-0"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+        </svg>
+        Create project
+      </button>
+    </form>
+  </section>
+
+  <section aria-labelledby="projects-heading" class="flex flex-col gap-3">
+    <h2 id="projects-heading" class="flex items-center gap-2 text-sm font-semibold">
+      Your projects
+      <span class="badge">{{ len .Projects }}</span>
+    </h2>
+
+    {{ if .Projects }}
+    <ul role="list" class="grid gap-3 sm:grid-cols-2">
+      {{ range .Projects }}
+      <li>
+        <a
+          href="/projects/{{ .Slug }}"
+          class="card group flex items-center justify-between gap-3 p-4 transition hover:border-slate-300 hover:shadow-md dark:hover:border-slate-700"
+        >
+          <span class="min-w-0">
+            <span class="block truncate text-sm font-semibold">{{ .Name }}</span>
+            <span class="mt-0.5 block truncate font-mono text-xs muted"
+              >{{ .Slug }}</span
+            >
+          </span>
+          <svg
+            aria-hidden="true"
+            focusable="false"
+            class="size-4 shrink-0 muted transition group-hover:translate-x-0.5 group-hover:text-slate-900 dark:group-hover:text-white"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"
+            />
+          </svg>
+        </a>
+      </li>
+      {{ end }}
+    </ul>
+    {{ else }}
+    <p class="card p-8 text-center text-sm text-pretty muted sm:p-10">
+      No projects yet. Create your first one above to start collecting runs.
+    </p>
+    {{ end }}
+  </section>
+</div>
 {{ end }}

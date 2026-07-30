@@ -1,32 +1,102 @@
 {{ define "content" }}
-<header>
-  <h1>Connect repositories</h1>
-</header></h1>  <p>Project: <strong>{{ .Project.Name }}</strong></p>
-</header>
+<div class="mx-auto flex max-w-3xl flex-col gap-8">
+  <header>
+    <a
+      href="/projects/{{ .Project.Slug }}"
+      class="inline-flex items-center gap-1.5 rounded text-xs font-medium muted transition hover:text-slate-900 dark:hover:text-white"
+    >
+      <svg
+        aria-hidden="true"
+        focusable="false"
+        class="size-3.5 shrink-0"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
+        />
+      </svg>
+      {{ .Project.Name }}
+    </a>
 
-<section>
-  <p>
-</p></section></p>    Repositories are managed by GitHub App installation settings. Any repository the app can access is available automatically in this project.
-  </p>
+    <h1 class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
+      Connect repositories
+    </h1>
+    <p class="mt-1.5 max-w-prose text-sm text-pretty muted">
+      Repositories are managed through your GitHub App installation. Every
+      repository the app can access is available in this project automatically —
+      there is nothing to link by hand.
+    </p>
+  </header>
 
-  {{ if .RepoLinks }}
-    <ul></ul>
+  <section aria-labelledby="available-repos-heading" class="flex flex-col gap-3">
+    <h2
+      id="available-repos-heading"
+      class="flex items-center gap-2 text-sm font-semibold"
+    >
+      Available repositories
+      <span class="badge">{{ len .RepoLinks }}</span>
+    </h2>
+
+    {{ if .RepoLinks }}
+    <ul role="list" class="card divide-y divide-slate-100 dark:divide-slate-800">
       {{ range .RepoLinks }}
-      <li>
-       </li> <code>{{ .RepoFullName }}</code>
-        <small>(installation: {{ .TargetLogin }})</small>
+      <li
+        class="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
+      >
+        <code class="chip max-w-full truncate">{{ .RepoFullName }}</code>
+        <span class="text-xs muted">
+          Installation:
+          <span class="font-medium text-slate-600 dark:text-slate-300"
+            >{{ .TargetLogin }}</span
+          >
+        </span>
       </li>
       {{ end }}
     </ul>
-  {{ else }}
-    <p>No repositories available yet.</p>
-  {{ end }}
+    {{ else }}
+    <p class="card p-8 text-center text-sm text-pretty muted sm:p-10">
+      No repositories available yet. Install the GitHub App and grant it access
+      to at least one repository.
+    </p>
+    {{ end }}
+  </section>
 
-  <p>
-</p>    <a href="{{ .GitHubAppInstallURL }}" role="button" target="_blank" rel="noopener noreferrer">Install GitHub App</a>
-    <a href="{{ .GitHubAppSettingsURL }}" role="button" class="secondary" target="_blank" rel="noopener noreferrer">GitHub App settings</a>
-  </p>
-</section>
+  <section aria-labelledby="manage-heading" class="card p-4 sm:p-5">
+    <h2 id="manage-heading" class="eyebrow">Manage access</h2>
+    <p class="mt-2 text-sm text-pretty muted">
+      Access is granted and revoked on GitHub. Changes show up here on your next
+      visit.
+    </p>
 
-<p><a href="/projects/{{ .Project.Slug }}">Back to project</a></p>
+    <div class="mt-4 flex flex-col gap-2 sm:flex-row">
+      <a
+        href="{{ .GitHubAppInstallURL }}"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="btn btn-primary w-full sm:w-auto"
+      >
+        {{ template "githubIcon" }}
+        Install GitHub App
+        <span class="sr-only">(opens in a new tab)</span>
+        {{ template "externalIcon" }}
+      </a>
+
+      <a
+        href="{{ .GitHubAppSettingsURL }}"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="btn btn-secondary w-full sm:w-auto"
+      >
+        GitHub App settings
+        <span class="sr-only">(opens in a new tab)</span>
+        {{ template "externalIcon" }}
+      </a>
+    </div>
+  </section>
+</div>
 {{ end }}

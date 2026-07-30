@@ -12,6 +12,17 @@ import (
 //go:embed templates static
 var embeddedFiles embed.FS
 
+// tailwindSource is the Tailwind CSS v4 input, inlined into every page inside a
+// <style type="text/tailwindcss"> block. The Tailwind browser CDN script picks
+// it up and compiles it client-side, so there is no build step.
+var tailwindSource = func() template.CSS {
+	b, err := embeddedFiles.ReadFile("static/tailwind.css")
+	if err != nil {
+		panic(err)
+	}
+	return template.CSS(b)
+}()
+
 type Renderer struct{}
 
 func NewRenderer() *Renderer {
@@ -37,8 +48,14 @@ func (r *Renderer) render(w http.ResponseWriter, page string, data any, status i
 			}
 			return sha[:7]
 		},
+		"isoTime": func(t time.Time) string {
+			return t.UTC().Format(time.RFC3339)
+		},
 		"isSelected": func(selected map[string]bool, key string) bool {
 			return selected[key]
+		},
+		"tailwindCSS": func() template.CSS {
+			return tailwindSource
 		},
 	}).ParseFS(embeddedFiles, "templates/base.html", fmt.Sprintf("templates/%s", page))
 	if err != nil {

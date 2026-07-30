@@ -1,42 +1,152 @@
 {{ define "base" }}
 <!doctype html>
-<html lang="en">
+<html lang="en" class="h-full">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ if .Title }}{{ .Title }} · {{ end }}ghapp-demo</title>
-    <link
-      rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+    <!-- Lets the UA theme form controls, scrollbars and the canvas from the OS preference. -->
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="CI egress control-plane: capture and review the outbound network activity of your GitHub Actions runs."
     />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <title>{{ if .Title }}{{ .Title }} · {{ end }}ghapp-demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style type="text/tailwindcss">{{ tailwindCSS }}</style>
   </head>
-  <body>
-    <main class="container">
-      <nav>
-        <ul>
-          <li><strong>ghapp-demo</strong></li>
-        </ul>
-        <ul>
-          {{ if .CurrentUser }}
-          <li><a href="/dashboard">Dashboard</a></li>
-          <li>
-            <form method="post" action="/auth/logout" style="margin: 0">
-              <button type="submit" class="secondary">Logout</button>
-            </form>
-          </li>
-          {{ else }}
-          <li><a href="/auth/github">Login with GitHub</a></li>
-          {{ end }}
-        </ul>
-      </nav>
+  <body
+    class="flex min-h-full flex-col bg-slate-50 font-sans text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100"
+  >
+    <a href="#main" class="skip-link">Skip to main content</a>
 
+    <header
+      class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/85 backdrop-blur dark:border-slate-800 dark:bg-slate-950/85"
+    >
+      <div class="page-container flex h-14 items-center justify-between gap-3">
+        <a
+          href="{{ if .CurrentUser }}/dashboard{{ else }}/{{ end }}"
+          class="flex items-center gap-2 rounded-md text-slate-900 dark:text-slate-100"
+        >
+          <span
+            aria-hidden="true"
+            class="grid size-7 shrink-0 place-items-center rounded-md bg-slate-900 text-[0.7rem] font-bold text-white dark:bg-white dark:text-slate-900"
+            >gh</span
+          >
+          <span class="text-sm font-semibold tracking-tight">ghapp-demo</span>
+          <span class="sr-only">— home</span>
+        </a>
+
+        <nav aria-label="Main" class="flex items-center gap-1 sm:gap-3">
+          {{ if .CurrentUser }}
+          <a
+            href="/dashboard"
+            class="btn btn-ghost btn-sm"
+            {{ if eq .Title "Dashboard" }}aria-current="page"{{ end }}
+            >Dashboard</a
+          >
+
+          <span class="flex items-center gap-2">
+            <span class="sr-only">Signed in as {{ .CurrentUser.Login }}</span>
+            {{ if .CurrentUser.AvatarURL }}
+            <img
+              src="{{ .CurrentUser.AvatarURL }}"
+              alt=""
+              width="24"
+              height="24"
+              loading="lazy"
+              class="size-6 rounded-full bg-slate-200 ring-1 ring-slate-200 dark:bg-slate-800 dark:ring-slate-700"
+            />
+            {{ end }}
+            <span
+              aria-hidden="true"
+              class="hidden text-sm font-medium text-slate-700 sm:inline dark:text-slate-300"
+              >{{ .CurrentUser.Login }}</span
+            >
+          </span>
+
+          <form method="post" action="/auth/logout">
+            <button type="submit" class="btn btn-secondary btn-sm">
+              Log out
+            </button>
+          </form>
+          {{ else }}
+          <a href="/auth/github" class="btn btn-primary btn-sm">
+            {{ template "githubIcon" }}
+            Log in with GitHub
+          </a>
+          {{ end }}
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="page-container w-full flex-1 py-8 sm:py-10">
       {{ if .Error }}
-      <article class="error-banner">{{ .Error }}</article>
+      <div
+        role="alert"
+        class="mb-6 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200"
+      >
+        <svg
+          aria-hidden="true"
+          focusable="false"
+          class="mt-0.5 size-5 shrink-0"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+          />
+        </svg>
+        <p><span class="sr-only">Error: </span>{{ .Error }}</p>
+      </div>
       {{ end }}
 
       {{ template "content" . }}
     </main>
+
+    <footer class="border-t border-slate-200 py-6 dark:border-slate-800">
+      <div
+        class="page-container flex flex-col gap-1 text-xs sm:flex-row sm:items-center sm:justify-between"
+      >
+        <p class="muted">ghapp-demo · CI egress control-plane</p>
+        <p class="muted">Adapts to your system light/dark preference.</p>
+      </div>
+    </footer>
   </body>
 </html>
+{{ end }}
+
+{{ define "githubIcon" }}
+<svg
+  aria-hidden="true"
+  focusable="false"
+  class="size-4 shrink-0"
+  viewBox="0 0 24 24"
+  fill="currentColor"
+>
+  <path
+    d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+  />
+</svg>
+{{ end }}
+
+{{ define "externalIcon" }}
+<svg
+  aria-hidden="true"
+  focusable="false"
+  class="size-4 shrink-0"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.5"
+>
+  <path
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+  />
+</svg>
 {{ end }}
