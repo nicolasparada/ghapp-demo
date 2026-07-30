@@ -1,0 +1,28 @@
+{{ define "content" }}
+<header>
+  <h1>Connect repositories</h1>
+  <p>Project: <strong>{{ .Project.Name }}</strong></p>
+</header>
+
+<section>
+  <p>
+    Select repositories to link to this project. A repository can be linked to multiple projects.
+  </p>
+  <form method="post" action="/projects/{{ .Project.Slug }}/connect">
+    {{ if .RepoLinks }}
+      {{ range .RepoLinks }}
+      <label>
+        <input type="checkbox" name="repos" value="{{ .RepoFullName }}" {{ if isSelected $.SelectedRepos .RepoFullName }}checked{{ end }} />
+        <code>{{ .RepoFullName }}</code>
+        <small>(installation: {{ .TargetLogin }})</small>
+      </label>
+      {{ end }}
+      <button type="submit">Save links</button>
+    {{ else }}
+      <p>No repositories available yet. Install the GitHub App first.</p>
+    {{ end }}
+  </form>
+</section>
+
+<p><a href="/projects/{{ .Project.Slug }}">Back to project</a></p>
+{{ end }}

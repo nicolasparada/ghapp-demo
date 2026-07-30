@@ -1,0 +1,8 @@
+.git
+.gitignore
+.env
+.env.*
+compose.yaml
+infra/terraform/.terraform
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*

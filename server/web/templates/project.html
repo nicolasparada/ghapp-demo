@@ -1,0 +1,54 @@
+{{ define "content" }}
+<header>
+  <h1>{{ .Project.Name }}</h1>
+  <p><code>{{ .Project.Slug }}</code></p>
+  <p>
+    <a href="/projects/{{ .Project.Slug }}/connect" role="button" class="secondary">Connect repositories</a>
+  </p>
+</header>
+
+<section>
+  <h2>Linked repositories</h2>
+  {{ if .Repos }}
+  <ul>
+    {{ range .Repos }}
+    <li><code>{{ . }}</code></li>
+    {{ end }}
+  </ul>
+  {{ else }}
+  <p>No repositories linked to this project yet.</p>
+  {{ end }}
+</section>
+
+<section>
+  <h2>Recent runs</h2>
+  {{ if .Runs }}
+  <table>
+    <thead>
+      <tr>
+        <th>Repo</th>
+        <th>Commit</th>
+        <th>Workflow</th>
+        <th>Job</th>
+        <th>Event</th>
+        <th>Created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{ range .Runs }}
+      <tr>
+        <td><code>{{ .RepoFullName }}</code></td>
+        <td><code>{{ shortSHA .CommitSHA }}</code></td>
+        <td>{{ .WorkflowName }}</td>
+        <td>{{ .JobName }}</td>
+        <td>{{ .EventName }}</td>
+        <td>{{ fmtTime .CreatedAt }}</td>
+      </tr>
+      {{ end }}
+    </tbody>
+  </table>
+  {{ else }}
+  <p>No runs yet.</p>
+  {{ end }}
+</section>
+{{ end }}

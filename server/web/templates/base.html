@@ -1,0 +1,42 @@
+{{ define "base" }}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ if .Title }}{{ .Title }} · {{ end }}ghapp-demo</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <nav>
+        <ul>
+          <li><strong>ghapp-demo</strong></li>
+        </ul>
+        <ul>
+          {{ if .CurrentUser }}
+          <li><a href="/dashboard">Dashboard</a></li>
+          <li>
+            <form method="post" action="/auth/logout" style="margin: 0">
+              <button type="submit" class="secondary">Logout</button>
+            </form>
+          </li>
+          {{ else }}
+          <li><a href="/auth/github">Login with GitHub</a></li>
+          {{ end }}
+        </ul>
+      </nav>
+
+      {{ if .Error }}
+      <article class="error-banner">{{ .Error }}</article>
+      {{ end }}
+
+      {{ template "content" . }}
+    </main>
+  </body>
+</html>
+{{ end }}
