@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-//go:embed templates/*.html static/*
+//go:embed templates static
 var embeddedFiles embed.FS
 
 type Renderer struct{}
