@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { STATE_AGENT_PID, STATE_CONTROL_PLANE_BASE_URL, STATE_STDERR_LOG_PATH, STATE_STDOUT_LOG_PATH, STATE_SUMMARY_PATH, formatError, getState, log, normalizeBaseUrl, sleep, toPositiveInteger, } from "./shared.js";
+const MAX_EMITTED_LOG_LINES = 200;
 async function runPost() {
     const controlPlaneBaseUrl = getControlPlaneBaseUrl();
     try {
@@ -9,6 +10,7 @@ async function runPost() {
     catch (error) {
         log("WARN", `failed while stopping agent: ${formatError(error)}`);
     }
+    await emitAgentLogsFromState();
     const summaryPath = getState(STATE_SUMMARY_PATH);
     if (summaryPath === null || summaryPath === "") {
         log("WARN", "no summary path in action state; skipping upload");
@@ -60,6 +62,74 @@ async function stopAgentIfRunning() {
     }
     if (stderrLogPath !== null && stderrLogPath !== "") {
         log("INFO", `agent stderr log: ${stderrLogPath}`);
+    }
+}
+async function emitAgentLogsFromState() {
+    const stdoutLogPath = getState(STATE_STDOUT_LOG_PATH);
+    const stderrLogPath = getState(STATE_STDERR_LOG_PATH);
+    await emitAgentLog(stdoutLogPath, "stdout");
+    await emitAgentLog(stderrLogPath, "stderr");
+}
+async function emitAgentLog(path, stream) {
+    if (path === null || path === "") {
+        log("INFO", `no ${stream} log path in state`);
+        return;
+    }
+    try {
+        const content = await readFile(path, { encoding: "utf8" });
+        const allLines = splitLines(content);
+        const tailLines = allLines.slice(-MAX_EMITTED_LOG_LINES);
+        const omittedLineCount = allLines.length - tailLines.length;
+        log("INFO", `emitting agent ${stream} log tail (${tailLines.length}/${allLines.length} lines) from ${path}`);
+        for (const line of tailLines) {
+            if (stream === "stdout") {
+                console.log(`[ghapp-egress-agent:${stream}] ${line}`);
+            }
+            else {
+                console.error(`[ghapp-egress-agent:${stream}] ${line}`);
+            }
+        }
+        await appendStepSummary(renderLogSummaryBlock({
+            stream,
+            path,
+            omittedLineCount,
+            totalLineCount: allLines.length,
+            tailLines,
+        }));
+    }
+    catch (error) {
+        log("WARN", `failed reading agent ${stream} log ${path}: ${formatError(error)}`);
+    }
+}
+function splitLines(content) {
+    const normalized = content.replaceAll("\r\n", "\n");
+    const rawLines = normalized.split("\n");
+    const lines = [];
+    for (const rawLine of rawLines) {
+        if (rawLine !== "") {
+            lines.push(rawLine);
+        }
+    }
+    return lines;
+}
+function renderLogSummaryBlock(args) {
+    const title = `### Agent ${args.stream} log`;
+    const metadata = `Path: \`${args.path}\`  \n` +
+        `Lines shown: ${args.tailLines.length}/${args.totalLineCount}` +
+        (args.omittedLineCount > 0 ? ` (omitted ${args.omittedLineCount})` : "");
+    const fenced = ["```text", ...args.tailLines, "```"].join("\n");
+    return `${title}\n\n${metadata}\n\n${fenced}\n\n`;
+}
+async function appendStepSummary(markdown) {
+    const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+    if (summaryPath === undefined || summaryPath === "") {
+        return;
+    }
+    try {
+        await appendFile(summaryPath, markdown, { encoding: "utf8" });
+    }
+    catch (error) {
+        log("WARN", `failed writing step summary: ${formatError(error)}`);
     }
 }
 function sendSignal(pid, signal) {

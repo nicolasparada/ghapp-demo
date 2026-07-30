@@ -18,6 +18,7 @@ All inputs are optional.
 - Logs errors/warnings and continues (fail-open behavior).
 - Linux-only (no-op on non-Linux runners).
 - Downloads the requested agent release asset (`agent_version`) for current Linux architecture from this action repository.
+- Post-step emits a tail of agent stdout/stderr logs directly into workflow logs and step summary.
 - Obtains GitHub OIDC token in post-step and uses `/runs/token` + `/runs` flow.
 
 ## Usage
