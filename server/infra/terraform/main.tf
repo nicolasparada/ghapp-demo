@@ -305,10 +305,7 @@ resource "google_cloud_run_v2_service" "control_plane" {
         }
       }
 
-      env {
-        name  = "PORT"
-        value = "8080"
-      }
+
 
       env {
         name  = "BASE_URL"
