@@ -88,46 +88,5 @@ jobs:
           echo "  ping github.com       = ${PING_DNS_EXIT}"
           echo "  bash child curl       = ${BASH_CHILD_EXIT}"
 
-      - name: Stop background agent early and inspect summary (best effort)
-        if: always()
-        run: |
-          set +e
-
-          pkill -f "egress-agent-linux-amd64" || true
-          sleep 2
-
-          SESSION_ROOT="${RUNNER_TEMP}/ghapp-egress-agent/sessions"
-          if [ -d "${SESSION_ROOT}" ]; then
-            SUMMARY_FILE="$(find "${SESSION_ROOT}" -type f -name run-summary.json | sort | tail -n 1)"
-            if [ -n "${SUMMARY_FILE}" ]; then
-              echo "Found summary file: ${SUMMARY_FILE}"
-              python3 - "${SUMMARY_FILE}" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-print("summary.total_events:", data.get("total_events"))
-print("summary.capture_backend:", data.get("capture_backend"))
-print("summary.errors_count:", len(data.get("errors", [])))
-PY
-            else
-              echo "No summary found yet. Action post-step may still finalize it."
-            fi
-          else
-            echo "No session directory found at ${SESSION_ROOT}"
-          fi
-
-      - name: Upload smoke artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: smoke-action-artifacts
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/ghapp-egress-agent/sessions/**
-
       - name: Verify job continues after action
         run: echo "Smoke workflow reached final step successfully"
