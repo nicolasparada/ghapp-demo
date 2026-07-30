@@ -68,10 +68,10 @@ tracepoint:syscalls:sys_enter_connect
   $family = *(uint16*)args->uservaddr;
   if ($family == 2) {
     $sa4 = (struct sockaddr_in *)args->uservaddr;
-    printf("E|%llu|%d|%d|%s|4|%s|%d\n", nsecs, pid, tid, comm, ntop($sa4->sin_addr.s_addr), ntohs($sa4->sin_port));
+    printf("E|%llu|%d|%d|%s|4|%s|%d\n", nsecs, pid, tid, comm, ntop($sa4->sin_addr.s_addr), $sa4->sin_port);
   } else if ($family == 10) {
     $sa6 = (struct sockaddr_in6 *)args->uservaddr;
-    printf("E|%llu|%d|%d|%s|6|%s|%d\n", nsecs, pid, tid, comm, ntop($sa6->sin6_addr.in6_u.u6_addr8), ntohs($sa6->sin6_port));
+    printf("E|%llu|%d|%d|%s|6|%s|%d\n", nsecs, pid, tid, comm, ntop($sa6->sin6_addr.in6_u.u6_addr8), $sa6->sin6_port);
   }
 }
 "#;
@@ -83,7 +83,7 @@ tracepoint:syscalls:sys_enter_connect
   $family = *(uint16*)args->uservaddr;
   if ($family == 2) {
     $sa4 = (struct sockaddr_in *)args->uservaddr;
-    printf("E|%llu|%d|%d|%s|4|%s|%d\n", nsecs, pid, tid, comm, ntop($sa4->sin_addr.s_addr), ntohs($sa4->sin_port));
+    printf("E|%llu|%d|%d|%s|4|%s|%d\n", nsecs, pid, tid, comm, ntop($sa4->sin_addr.s_addr), $sa4->sin_port);
   }
 }
 "#;
@@ -969,12 +969,13 @@ tracepoint:syscalls:sys_enter_connect
         };
 
         let destination = parts[6].to_string();
-        let port = match parts[7].parse::<u16>() {
+        let raw_port = match parts[7].parse::<u16>() {
             Ok(v) => v,
             Err(_) => {
                 return ParsedLine::Invalid(format!("invalid destination port in line: {line}"));
             }
         };
+        let port = u16::from_be(raw_port);
 
         ParsedLine::Event(RawEgressEvent {
             unix_nanos,
