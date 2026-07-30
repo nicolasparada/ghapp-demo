@@ -1,19 +1,19 @@
 {{ define "content" }}
 <header>
   <h1>Connect repositories</h1>
-  <p>Project: <strong>{{ .Project.Name }}</strong></p>
+</header></h1>  <p>Project: <strong>{{ .Project.Name }}</strong></p>
 </header>
 
 <section>
   <p>
-    Repositories are managed by GitHub App installation settings. Any repository the app can access is available automatically in this project.
+</p></section></p>    Repositories are managed by GitHub App installation settings. Any repository the app can access is available automatically in this project.
   </p>
 
   {{ if .RepoLinks }}
-    <ul>
-</ul>      {{ range .RepoLinks }}
+    <ul></ul>
+      {{ range .RepoLinks }}
       <li>
-        <code</li>>{{ .RepoFullName }}</code>
+       </li> <code>{{ .RepoFullName }}</code>
         <small>(installation: {{ .TargetLogin }})</small>
       </li>
       {{ end }}
