@@ -1,0 +1,86 @@
+name: Deploy control-plane to Cloud Run
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "server/**"
+      - ".github/workflows/deploy-control-plane.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TERRAFORM_DIR: server/infra/terraform
+  REGION: ${{ vars.GCP_REGION }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  ARTIFACT_REPOSITORY_ID: control-plane
+  IMAGE_NAME: control-plane-server
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+      TF_VAR_artifact_repository_id: control-plane
+      TF_VAR_base_url: ${{ vars.CONTROL_PLANE_BASE_URL || 'https://example.invalid' }}
+      TF_VAR_github_client_id: ${{ vars.CONTROL_PLANE_GITHUB_CLIENT_ID }}
+      TF_VAR_github_client_secret: ${{ secrets.CONTROL_PLANE_GITHUB_CLIENT_SECRET }}
+      TF_VAR_github_app_id: ${{ vars.CONTROL_PLANE_GITHUB_APP_ID }}
+      TF_VAR_github_app_private_key: ${{ secrets.CONTROL_PLANE_GITHUB_APP_PRIVATE_KEY }}
+      TF_VAR_github_app_webhook_secret: ${{ secrets.CONTROL_PLANE_GITHUB_APP_WEBHOOK_SECRET }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        run: |
+          terraform -chdir="${TERRAFORM_DIR}" init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="prefix=control-plane"
+
+      - name: Ensure Artifact Registry exists
+        run: |
+          terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
+            -target=google_artifact_registry_repository.server
+
+      - name: Configure Docker auth for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push control-plane image
+        run: |
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY_ID}/${IMAGE_NAME}:${GITHUB_SHA}"
+          echo "IMAGE_URI=${IMAGE_URI}" >> "${GITHUB_ENV}"
+
+          docker build -f server/Dockerfile -t "${IMAGE_URI}" server
+          docker push "${IMAGE_URI}"
+
+      - name: Terraform apply
+        run: |
+          terraform -chdir="${TERRAFORM_DIR}" apply -auto-approve \
+            -var="container_image=${IMAGE_URI}"
+
+      - name: Show Cloud Run URL
+        run: terraform -chdir="${TERRAFORM_DIR}" output cloud_run_service_url
