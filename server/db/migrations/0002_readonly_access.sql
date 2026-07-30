@@ -24,12 +24,17 @@ BEGIN
     ) INTO readonly_role_exists;
 
     IF readonly_role_exists THEN
-        EXECUTE 'GRANT USAGE ON SCHEMA public TO ghapp_readonly';
-        EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA public TO ghapp_readonly';
-        EXECUTE 'GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO ghapp_readonly';
+        BEGIN
+            EXECUTE 'GRANT USAGE ON SCHEMA public TO ghapp_readonly';
+            EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA public TO ghapp_readonly';
+            EXECUTE 'GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO ghapp_readonly';
 
-        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ghapp_readonly';
-        EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO ghapp_readonly';
+            EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO ghapp_readonly';
+            EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO ghapp_readonly';
+        EXCEPTION
+            WHEN insufficient_privilege THEN
+                RAISE NOTICE 'Skipping ghapp_readonly grants: insufficient privilege as %', current_user;
+        END;
     END IF;
 
     -- Grant access to existing IAM users (role membership when possible,

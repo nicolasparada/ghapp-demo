@@ -101,24 +101,122 @@ func applyMigration(ctx context.Context, pool *pgxpool.Pool, name string, sql st
 }
 
 func splitStatements(sql string) []string {
-	var cleanedLines []string
-	for line := range strings.SplitSeq(sql, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "--") {
-			continue
-		}
-		cleanedLines = append(cleanedLines, line)
-	}
-	cleaned := strings.Join(cleanedLines, "\n")
+	stmts := make([]string, 0, 8)
+	var current strings.Builder
 
-	parts := strings.Split(cleaned, ";")
-	stmts := make([]string, 0, len(parts))
-	for _, part := range parts {
-		stmt := strings.TrimSpace(part)
-		if stmt == "" {
+	inLineComment := false
+	inSingleQuote := false
+	inDoubleQuote := false
+	dollarTag := ""
+
+	for i := 0; i < len(sql); i++ {
+		ch := sql[i]
+
+		if inLineComment {
+			if ch == '\n' {
+				inLineComment = false
+				current.WriteByte(ch)
+			}
 			continue
 		}
+
+		if dollarTag != "" {
+			if strings.HasPrefix(sql[i:], dollarTag) {
+				current.WriteString(dollarTag)
+				i += len(dollarTag) - 1
+				dollarTag = ""
+				continue
+			}
+			current.WriteByte(ch)
+			continue
+		}
+
+		if inSingleQuote {
+			current.WriteByte(ch)
+			if ch == '\'' {
+				if i+1 < len(sql) && sql[i+1] == '\'' {
+					current.WriteByte(sql[i+1])
+					i++
+					continue
+				}
+				inSingleQuote = false
+			}
+			continue
+		}
+
+		if inDoubleQuote {
+			current.WriteByte(ch)
+			if ch == '"' {
+				if i+1 < len(sql) && sql[i+1] == '"' {
+					current.WriteByte(sql[i+1])
+					i++
+					continue
+				}
+				inDoubleQuote = false
+			}
+			continue
+		}
+
+		if ch == '-' && i+1 < len(sql) && sql[i+1] == '-' {
+			inLineComment = true
+			i++
+			continue
+		}
+
+		if ch == '\'' {
+			inSingleQuote = true
+			current.WriteByte(ch)
+			continue
+		}
+
+		if ch == '"' {
+			inDoubleQuote = true
+			current.WriteByte(ch)
+			continue
+		}
+
+		if ch == '$' {
+			tag, ok := parseDollarTag(sql, i)
+			if ok {
+				dollarTag = tag
+				current.WriteString(tag)
+				i += len(tag) - 1
+				continue
+			}
+		}
+
+		if ch == ';' {
+			stmt := strings.TrimSpace(current.String())
+			if stmt != "" {
+				stmts = append(stmts, stmt)
+			}
+			current.Reset()
+			continue
+		}
+
+		current.WriteByte(ch)
+	}
+
+	stmt := strings.TrimSpace(current.String())
+	if stmt != "" {
 		stmts = append(stmts, stmt)
 	}
+
 	return stmts
+}
+
+func parseDollarTag(s string, start int) (string, bool) {
+	if start >= len(s) || s[start] != '$' {
+		return "", false
+	}
+	for i := start + 1; i < len(s); i++ {
+		ch := s[i]
+		if ch == '$' {
+			return s[start : i+1], true
+		}
+		if !(ch == '_' || (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+			return "", false
+		}
+	}
+	return "", false
 }
