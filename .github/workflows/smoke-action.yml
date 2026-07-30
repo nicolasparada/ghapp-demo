@@ -1,0 +1,133 @@
+name: Smoke test egress action
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "action/**"
+      - "agent/**"
+      - "action.yml"
+      - ".github/workflows/smoke-action.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "action/**"
+      - "agent/**"
+      - "action.yml"
+      - ".github/workflows/smoke-action.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  smoke:
+    name: Run action and generate egress
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build agent binary for local smoke run
+        run: |
+          set -euo pipefail
+          cargo -C agent build --release
+
+      - name: Seed local action agent cache (skip release download dependency)
+        run: |
+          set -euo pipefail
+          CACHE_DIR="${RUNNER_TEMP}/ghapp-egress-agent/bin/nicolasparada-ghapp-demo/latest/latest/amd64"
+          mkdir -p "${CACHE_DIR}"
+          cp agent/target/release/egress-agent "${CACHE_DIR}/egress-agent-linux-amd64"
+          chmod +x "${CACHE_DIR}/egress-agent-linux-amd64"
+          echo "Seeded cache at ${CACHE_DIR}"
+
+      - name: Start action under test
+        uses: ./
+        with:
+          agent_version: latest
+
+      - name: Run smoke network activity (bash + curl + wget + ping)
+        run: |
+          set +e
+
+          echo "Running curl requests..."
+          curl -fsS https://example.com >/dev/null
+          CURL_EXAMPLE_EXIT=$?
+
+          curl -fsS https://api.github.com >/dev/null
+          CURL_GITHUB_EXIT=$?
+
+          echo "Running wget requests..."
+          wget -qO- https://www.rust-lang.org >/dev/null
+          WGET_RUST_EXIT=$?
+
+          wget -qO- https://httpbin.org/get >/dev/null
+          WGET_HTTPBIN_EXIT=$?
+
+          echo "Running ping commands..."
+          ping -c 2 1.1.1.1 >/dev/null 2>&1
+          PING_IP_EXIT=$?
+
+          ping -c 2 github.com >/dev/null 2>&1
+          PING_DNS_EXIT=$?
+
+          echo "Running child bash process network activity..."
+          bash -lc 'curl -fsS https://www.cloudflare.com/cdn-cgi/trace >/dev/null'
+          BASH_CHILD_EXIT=$?
+
+          echo "Command exit codes:"
+          echo "  curl example.com      = ${CURL_EXAMPLE_EXIT}"
+          echo "  curl api.github.com   = ${CURL_GITHUB_EXIT}"
+          echo "  wget rust-lang.org    = ${WGET_RUST_EXIT}"
+          echo "  wget httpbin.org      = ${WGET_HTTPBIN_EXIT}"
+          echo "  ping 1.1.1.1          = ${PING_IP_EXIT}"
+          echo "  ping github.com       = ${PING_DNS_EXIT}"
+          echo "  bash child curl       = ${BASH_CHILD_EXIT}"
+
+      - name: Stop background agent early and inspect summary (best effort)
+        if: always()
+        run: |
+          set +e
+
+          pkill -f "egress-agent-linux-amd64" || true
+          sleep 2
+
+          SESSION_ROOT="${RUNNER_TEMP}/ghapp-egress-agent/sessions"
+          if [ -d "${SESSION_ROOT}" ]; then
+            SUMMARY_FILE="$(find "${SESSION_ROOT}" -type f -name run-summary.json | sort | tail -n 1)"
+            if [ -n "${SUMMARY_FILE}" ]; then
+              echo "Found summary file: ${SUMMARY_FILE}"
+              python3 - "${SUMMARY_FILE}" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+print("summary.total_events:", data.get("total_events"))
+print("summary.capture_backend:", data.get("capture_backend"))
+print("summary.errors_count:", len(data.get("errors", [])))
+PY
+            else
+              echo "No summary found yet. Action post-step may still finalize it."
+            fi
+          else
+            echo "No session directory found at ${SESSION_ROOT}"
+          fi
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-action-artifacts
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/ghapp-egress-agent/sessions/**
+
+      - name: Verify job continues after action
+        run: echo "Smoke workflow reached final step successfully"
