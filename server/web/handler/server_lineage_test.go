@@ -73,6 +73,32 @@ func TestConvertLineageTreeToView(t *testing.T) {
 	}
 }
 
+func TestConfiguredGitHubAppSettingsURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		settingsURL string
+		installURL  string
+		want        string
+	}{
+		{name: "both empty", settingsURL: "", installURL: "", want: "https://github.com/apps"},
+		{name: "settings preferred", settingsURL: "https://github.com/apps/ghapp-demo-app", installURL: "https://github.com/apps/ghapp-demo-app/installations/new", want: "https://github.com/apps/ghapp-demo-app"},
+		{name: "fallback to install url as-is", settingsURL: "", installURL: "https://github.com/apps/ghapp-demo-app/installations/new", want: "https://github.com/apps/ghapp-demo-app/installations/new"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := configuredGitHubAppSettingsURL(tc.settingsURL, tc.installURL)
+			if got != tc.want {
+				t.Fatalf("configuredGitHubAppSettingsURL(%q, %q) = %q, want %q", tc.settingsURL, tc.installURL, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateRunSummaryPayload(t *testing.T) {
 	t.Parallel()
 

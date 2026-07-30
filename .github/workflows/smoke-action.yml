@@ -1,21 +1,7 @@
-name: Smoke test egress action
+name: Smoke test
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "action/**"
-      - "agent/**"
-      - "action.yml"
-      - ".github/workflows/smoke-action.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "action/**"
-      - "agent/**"
-      - "action.yml"
-      - ".github/workflows/smoke-action.yml"
 
 permissions:
   contents: read

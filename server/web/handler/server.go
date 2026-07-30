@@ -32,10 +32,11 @@ import (
 )
 
 type Config struct {
-	BaseURL             string
-	GitHubClientID      string
-	GitHubClientSecret  string
-	GitHubAppInstallURL string
+	BaseURL              string
+	GitHubClientID       string
+	GitHubClientSecret   string
+	GitHubAppInstallURL  string
+	GitHubAppSettingsURL string
 }
 
 type Server struct {
@@ -62,10 +63,11 @@ type dashboardData struct {
 
 type connectData struct {
 	pageData
-	Project             types.Project
-	RepoLinks           []types.RepoLink
-	SelectedRepos       map[string]bool
-	GitHubAppInstallURL string
+	Project              types.Project
+	RepoLinks            []types.RepoLink
+	SelectedRepos        map[string]bool
+	GitHubAppInstallURL  string
+	GitHubAppSettingsURL string
 }
 
 type projectRunRow struct {
@@ -582,11 +584,12 @@ func (a *Server) handleConnectReposPage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := a.renderer.Render(w, "connect.html", connectData{
-		pageData:            pageData{Title: "Connect repositories", CurrentUser: user},
-		Project:             project,
-		RepoLinks:           repoLinks,
-		SelectedRepos:       selected,
-		GitHubAppInstallURL: a.cfg.GitHubAppInstallURL,
+		pageData:             pageData{Title: "Connect repositories", CurrentUser: user},
+		Project:              project,
+		RepoLinks:            repoLinks,
+		SelectedRepos:        selected,
+		GitHubAppInstallURL:  a.cfg.GitHubAppInstallURL,
+		GitHubAppSettingsURL: configuredGitHubAppSettingsURL(a.cfg.GitHubAppSettingsURL, a.cfg.GitHubAppInstallURL),
 	}); err != nil {
 		a.renderError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1171,6 +1174,16 @@ func countLineageEventNodes(events []runEventPayload) int {
 		}
 	}
 	return len(seen)
+}
+
+func configuredGitHubAppSettingsURL(settingsURL string, installURL string) string {
+	if value := strings.TrimSpace(settingsURL); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(installURL); value != "" {
+		return value
+	}
+	return "https://github.com/apps"
 }
 
 func (a *Server) renderError(w http.ResponseWriter, status int, message string) {

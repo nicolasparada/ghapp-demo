@@ -418,8 +418,8 @@ resource "google_cloud_run_v2_service" "control_plane" {
       }
 
       env {
-        name  = "GITHUB_APP_INSTALL_URL"
-        value = var.github_app_install_url
+        name  = "GITHUB_APP_SLUG"
+        value = var.github_app_slug
       }
 
       dynamic "env" {

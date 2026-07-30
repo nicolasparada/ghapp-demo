@@ -20,10 +20,12 @@
       <button type="submit">Save links</button>
     {{ else }}
       <p>No repositories available yet.</p>
-      <p></p>
-        <a href="{{ .GitHubAppInstallURL }}" role="button" target="_blank" rel="noopener noreferrer">Install GitHub App</a>
-      </p>
     {{ end }}
+
+    <p>
+      <a href="{{ .GitHubAppInstallURL }}" role="button" target="_blank" rel="noopener noreferrer">Install GitHub App</a>
+      <a href="{{ .GitHubAppSettingsURL }}" role="button" class="secondary" target="_blank" rel="noopener noreferrer">GitHub App settings</a>
+    </p>
   </form>
 </section>
 

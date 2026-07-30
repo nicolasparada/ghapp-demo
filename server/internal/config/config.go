@@ -17,7 +17,9 @@ type Config struct {
 	GitHubAppID            string
 	GitHubAppPrivateKey    string
 	GitHubAppWebhookSecret string
+	GitHubAppSlug          string
 	GitHubAppInstallURL    string
+	GitHubAppSettingsURL   string
 	MigrateOnly            bool
 }
 
@@ -26,6 +28,14 @@ func FromEnv() Config {
 	baseURL := getenv("BASE_URL", fmt.Sprintf("http://localhost:%s", port))
 
 	oidcAudience := getenv("OIDC_AUDIENCE", strings.TrimRight(baseURL, "/"))
+
+	githubAppSlug := strings.TrimSpace(os.Getenv("GITHUB_APP_SLUG"))
+	githubAppSettingsURL := "https://github.com/apps"
+	githubAppInstallURL := "https://github.com/apps"
+	if githubAppSlug != "" {
+		githubAppSettingsURL = "https://github.com/apps/" + githubAppSlug
+		githubAppInstallURL = githubAppSettingsURL + "/installations/new"
+	}
 
 	return Config{
 		DatabaseURL:            getenv("DATABASE_URL", "postgres://ghapp_demo:ghapp_demo@localhost:5432/ghapp_demo?sslmode=disable"),
@@ -38,7 +48,9 @@ func FromEnv() Config {
 		GitHubAppID:            os.Getenv("GITHUB_APP_ID"),
 		GitHubAppPrivateKey:    os.Getenv("GITHUB_APP_PRIVATE_KEY"),
 		GitHubAppWebhookSecret: os.Getenv("GITHUB_APP_WEBHOOK_SECRET"),
-		GitHubAppInstallURL:    getenv("GITHUB_APP_INSTALL_URL", "https://github.com/apps"),
+		GitHubAppSlug:          githubAppSlug,
+		GitHubAppInstallURL:    githubAppInstallURL,
+		GitHubAppSettingsURL:   githubAppSettingsURL,
 		MigrateOnly:            os.Getenv("MIGRATE_ONLY") == "1",
 	}
 }

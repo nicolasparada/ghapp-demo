@@ -1,4 +1,4 @@
-name: Release egress agent
+name: Release agent
 
 on:
   push:

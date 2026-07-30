@@ -40,10 +40,10 @@ variable "github_app_id" {
   default     = ""
 }
 
-variable "github_app_install_url" {
-  description = "GitHub App installation URL shown in the control-plane UI"
+variable "github_app_slug" {
+  description = "GitHub App slug used by the control-plane UI to derive install/settings URLs"
   type        = string
-  default     = "https://github.com/apps/ghapp-demo-app/installations/new"
+  default     = "ghapp-demo-app"
 }
 
 variable "github_app_private_key" {
