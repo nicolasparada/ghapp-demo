@@ -24,16 +24,16 @@ output "db_password_secret_id" {
 }
 
 output "github_client_secret_secret_id" {
-  description = "Secret Manager secret ID that stores GitHub OAuth client secret"
-  value       = google_secret_manager_secret.github_client_secret.secret_id
+  description = "Secret Manager secret ID that stores GitHub OAuth client secret (null when unset)"
+  value       = length(google_secret_manager_secret.github_client_secret) > 0 ? google_secret_manager_secret.github_client_secret[0].secret_id : null
 }
 
 output "github_app_private_key_secret_id" {
-  description = "Secret Manager secret ID that stores GitHub App private key"
-  value       = google_secret_manager_secret.github_app_private_key.secret_id
+  description = "Secret Manager secret ID that stores GitHub App private key (null when unset)"
+  value       = length(google_secret_manager_secret.github_app_private_key) > 0 ? google_secret_manager_secret.github_app_private_key[0].secret_id : null
 }
 
 output "github_app_webhook_secret_secret_id" {
-  description = "Secret Manager secret ID that stores GitHub App webhook secret"
-  value       = google_secret_manager_secret.github_app_webhook_secret.secret_id
+  description = "Secret Manager secret ID that stores GitHub App webhook secret (null when unset)"
+  value       = length(google_secret_manager_secret.github_app_webhook_secret) > 0 ? google_secret_manager_secret.github_app_webhook_secret[0].secret_id : null
 }

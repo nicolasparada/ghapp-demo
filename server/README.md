@@ -242,13 +242,31 @@ docker compose -f server/compose.yaml up -d postgres
 ```
 
 ### `runs token manager not configured`
-Set both:
+Expected during bootstrap if GitHub App is not configured yet.
+To enable run upload token signing later, set both:
 - `GITHUB_APP_ID`
 - `GITHUB_APP_PRIVATE_KEY`
 
 ### `invalid oidc token`
 Most common cause is audience mismatch.
 Ensure the action requests an ID token with audience exactly equal to `OIDC_AUDIENCE`.
+
+### Cloud SQL tier error: `Invalid Tier (...) for (ENTERPRISE_PLUS) Edition`
+The Terraform defaults use `sql_edition = "ENTERPRISE"` and `sql_database_version = "POSTGRES_18"`, which supports `db-custom-*` tiers and is cheaper than ENTERPRISE_PLUS.
+If you explicitly set `sql_edition = "ENTERPRISE_PLUS"`, you must choose a compatible `db-perf-optimized-*` tier.
+
+### IAM API disabled in CI (`iam.googleapis.com`)
+Enable IAM API for the project and rerun. The CI workflow now pre-enables foundational APIs, but first-time propagation can take a few minutes.
+
+### Forbidden while applying project IAM bindings
+If your deployer service account cannot modify project IAM policy, keep Terraform bootstrap-friendly defaults:
+- `grant_human_db_project_roles = false` (default)
+
+Then grant stronger IAM permissions to deployer and enable this later.
+
+### Secret Manager payload required (`Field [payload] is required`)
+This happens when Terraform tries to create secret versions with empty values.
+In this repo, GitHub app-related secrets are optional during bootstrap. If unset, Terraform now skips those secret resources.
 
 ---
 
@@ -306,6 +324,7 @@ PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(proje
 gcloud services enable \
   cloudresourcemanager.googleapis.com \
   serviceusage.googleapis.com \
+  iam.googleapis.com \
   run.googleapis.com \
   sqladmin.googleapis.com \
   artifactregistry.googleapis.com \
@@ -335,6 +354,8 @@ gcloud iam service-accounts create "${DEPLOYER_SA_NAME}" \
 for ROLE in \
   roles/run.admin \
   roles/iam.serviceAccountUser \
+  roles/iam.serviceAccountAdmin \
+  roles/resourcemanager.projectIamAdmin \
   roles/cloudsql.admin \
   roles/secretmanager.admin \
   roles/artifactregistry.admin \
@@ -396,17 +417,21 @@ The deploy workflow uses **repository variables for non-sensitive values** and *
 
 Set these **Repository Variables** (`Settings → Secrets and variables → Actions → Variables`):
 
+**Required for deploy**
 - `GCP_PROJECT_ID` = `ghapp-demo`
 - `GCP_REGION` = `us-central1` (or the region you chose)
 - `GCP_WIF_PROVIDER` = `projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/github-pool/providers/github-provider`
 - `GCP_WIF_SERVICE_ACCOUNT` = `ghapp-deployer@ghapp-demo.iam.gserviceaccount.com`
 - `TF_STATE_BUCKET` = `ghapp-demo-tf-state` (or the bucket name you created)
-- `CONTROL_PLANE_BASE_URL` (optional for bootstrap; preferred if you already have a custom domain)
-- `CONTROL_PLANE_GITHUB_CLIENT_ID` (value: your GitHub OAuth client ID)
-- `CONTROL_PLANE_GITHUB_APP_ID` (value: your GitHub App ID)
+
+**Optional for bootstrap (set later)**
+- `CONTROL_PLANE_BASE_URL` (optional for bootstrap; preferred once you know final URL/custom domain)
+- `CONTROL_PLANE_GITHUB_CLIENT_ID` (GitHub OAuth client ID)
+- `CONTROL_PLANE_GITHUB_APP_ID` (GitHub App ID)
 
 Set these **Repository Secrets** (`Settings → Secrets and variables → Actions → Secrets`):
 
+**Optional for bootstrap (set later)**
 - `CONTROL_PLANE_GITHUB_CLIENT_SECRET`
 - `CONTROL_PLANE_GITHUB_APP_PRIVATE_KEY`
 - `CONTROL_PLANE_GITHUB_APP_WEBHOOK_SECRET`
@@ -414,7 +439,7 @@ Set these **Repository Secrets** (`Settings → Secrets and variables → Action
 > GitHub does not allow custom variable/secret names starting with `GITHUB_`, so CI inputs use the `CONTROL_PLANE_` prefix.
 > Terraform maps these into runtime env vars expected by the app (`GITHUB_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY`, etc.).
 
-Sensitive values are written by Terraform into Secret Manager and consumed by Cloud Run via secret references.
+Sensitive values are written by Terraform into Secret Manager and consumed by Cloud Run via secret references when provided.
 ### C) Run deploy
 
 Trigger workflow:

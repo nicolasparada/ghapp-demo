@@ -39,6 +39,12 @@ variable "sql_database_version" {
   default     = "POSTGRES_18"
 }
 
+variable "sql_edition" {
+  description = "Cloud SQL edition. Use ENTERPRISE for lower-cost PoC, ENTERPRISE_PLUS for premium tiers"
+  type        = string
+  default     = "ENTERPRISE"
+}
+
 variable "sql_database_name" {
   description = "Cloud SQL database name"
   type        = string
@@ -106,14 +112,16 @@ variable "oidc_audience" {
 }
 
 variable "github_client_id" {
-  description = "GitHub OAuth App client ID"
+  description = "GitHub OAuth App client ID (optional during bootstrap)"
   type        = string
+  default     = ""
 }
 
 variable "github_client_secret" {
-  description = "GitHub OAuth App client secret (stored in Secret Manager via write-only secret version)"
+  description = "GitHub OAuth App client secret (optional during bootstrap; stored in Secret Manager when provided)"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "github_client_secret_secret_id" {
@@ -123,14 +131,16 @@ variable "github_client_secret_secret_id" {
 }
 
 variable "github_app_id" {
-  description = "GitHub App ID"
+  description = "GitHub App ID (optional during bootstrap)"
   type        = string
+  default     = ""
 }
 
 variable "github_app_private_key" {
-  description = "GitHub App private key PEM (supports escaped newlines, stored in Secret Manager via write-only secret version)"
+  description = "GitHub App private key PEM (optional during bootstrap; stored in Secret Manager when provided)"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "github_app_private_key_secret_id" {
@@ -140,9 +150,10 @@ variable "github_app_private_key_secret_id" {
 }
 
 variable "github_app_webhook_secret" {
-  description = "GitHub App webhook secret (stored in Secret Manager via write-only secret version)"
+  description = "GitHub App webhook secret (optional during bootstrap; stored in Secret Manager when provided)"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "github_app_webhook_secret_secret_id" {
@@ -155,6 +166,12 @@ variable "iam_db_login_user_email" {
   description = "Human IAM user email allowed to authenticate to Cloud SQL Postgres"
   type        = string
   default     = "parada.nicolas@outlook.com"
+}
+
+variable "grant_human_db_project_roles" {
+  description = "Grant project-level IAM roles (cloudsql.client and cloudsql.instanceUser) to iam_db_login_user_email"
+  type        = bool
+  default     = false
 }
 
 variable "allow_unauthenticated" {
@@ -185,4 +202,10 @@ variable "container_memory" {
   description = "Cloud Run container memory limit"
   type        = string
   default     = "512Mi"
+}
+
+variable "sql_backup_enabled" {
+  description = "Enable Cloud SQL automated backups"
+  type        = bool
+  default     = false
 }

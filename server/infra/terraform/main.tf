@@ -3,6 +3,12 @@ locals {
 
   sql_connection_name = google_sql_database_instance.main.connection_name
   database_url        = "postgres://${var.sql_database_user}:${urlencode(ephemeral.random_password.db_password.result)}@/${var.sql_database_name}?host=/cloudsql/${local.sql_connection_name}&sslmode=disable"
+
+  has_github_client_secret      = trimspace(var.github_client_secret) != ""
+  has_github_app_private_key    = trimspace(var.github_app_private_key) != ""
+  has_github_app_webhook_secret = trimspace(var.github_app_webhook_secret) != ""
+
+  should_grant_human_db_project_roles = var.grant_human_db_project_roles && trimspace(var.iam_db_login_user_email) != ""
 }
 
 resource "google_project_service" "cloudresourcemanager" {
@@ -20,6 +26,14 @@ resource "google_project_service" "artifactregistry" {
 resource "google_project_service" "run" {
   project            = var.project_id
   service            = "run.googleapis.com"
+  disable_on_destroy = false
+
+  depends_on = [google_project_service.cloudresourcemanager]
+}
+
+resource "google_project_service" "iam" {
+  project            = var.project_id
+  service            = "iam.googleapis.com"
   disable_on_destroy = false
 
   depends_on = [google_project_service.cloudresourcemanager]
@@ -60,14 +74,15 @@ resource "google_sql_database_instance" "main" {
   deletion_protection = var.sql_deletion_protection
 
   settings {
-    tier = var.db_tier
+    tier    = var.db_tier
+    edition = var.sql_edition
 
     ip_configuration {
       ipv4_enabled = true
     }
 
     backup_configuration {
-      enabled = true
+      enabled = var.sql_backup_enabled
     }
 
     database_flags {
@@ -109,6 +124,8 @@ resource "google_sql_user" "iam_human_user" {
 resource "google_service_account" "control_plane" {
   account_id   = "ghapp-control-plane"
   display_name = "ghapp-demo control-plane"
+
+  depends_on = [google_project_service.iam]
 }
 
 resource "google_project_iam_member" "control_plane_cloudsql_client" {
@@ -152,6 +169,8 @@ resource "google_secret_manager_secret_version" "database_url" {
 }
 
 resource "google_secret_manager_secret" "github_client_secret" {
+  count = local.has_github_client_secret ? 1 : 0
+
   secret_id = var.github_client_secret_secret_id
 
   replication {
@@ -162,13 +181,17 @@ resource "google_secret_manager_secret" "github_client_secret" {
 }
 
 resource "google_secret_manager_secret_version" "github_client_secret" {
-  secret = google_secret_manager_secret.github_client_secret.id
+  count = local.has_github_client_secret ? 1 : 0
+
+  secret = google_secret_manager_secret.github_client_secret[0].id
 
   secret_data_wo         = var.github_client_secret
   secret_data_wo_version = var.app_secrets_version
 }
 
 resource "google_secret_manager_secret" "github_app_private_key" {
+  count = local.has_github_app_private_key ? 1 : 0
+
   secret_id = var.github_app_private_key_secret_id
 
   replication {
@@ -179,13 +202,17 @@ resource "google_secret_manager_secret" "github_app_private_key" {
 }
 
 resource "google_secret_manager_secret_version" "github_app_private_key" {
-  secret = google_secret_manager_secret.github_app_private_key.id
+  count = local.has_github_app_private_key ? 1 : 0
+
+  secret = google_secret_manager_secret.github_app_private_key[0].id
 
   secret_data_wo         = var.github_app_private_key
   secret_data_wo_version = var.app_secrets_version
 }
 
 resource "google_secret_manager_secret" "github_app_webhook_secret" {
+  count = local.has_github_app_webhook_secret ? 1 : 0
+
   secret_id = var.github_app_webhook_secret_secret_id
 
   replication {
@@ -196,7 +223,9 @@ resource "google_secret_manager_secret" "github_app_webhook_secret" {
 }
 
 resource "google_secret_manager_secret_version" "github_app_webhook_secret" {
-  secret = google_secret_manager_secret.github_app_webhook_secret.id
+  count = local.has_github_app_webhook_secret ? 1 : 0
+
+  secret = google_secret_manager_secret.github_app_webhook_secret[0].id
 
   secret_data_wo         = var.github_app_webhook_secret
   secret_data_wo_version = var.app_secrets_version
@@ -209,25 +238,31 @@ resource "google_secret_manager_secret_iam_member" "control_plane_database_url_a
 }
 
 resource "google_secret_manager_secret_iam_member" "control_plane_github_client_secret_accessor" {
-  secret_id = google_secret_manager_secret.github_client_secret.id
+  count = local.has_github_client_secret ? 1 : 0
+
+  secret_id = google_secret_manager_secret.github_client_secret[0].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.control_plane.email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "control_plane_github_app_private_key_accessor" {
-  secret_id = google_secret_manager_secret.github_app_private_key.id
+  count = local.has_github_app_private_key ? 1 : 0
+
+  secret_id = google_secret_manager_secret.github_app_private_key[0].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.control_plane.email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "control_plane_github_app_webhook_secret_accessor" {
-  secret_id = google_secret_manager_secret.github_app_webhook_secret.id
+  count = local.has_github_app_webhook_secret ? 1 : 0
+
+  secret_id = google_secret_manager_secret.github_app_webhook_secret[0].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.control_plane.email}"
 }
 
 resource "google_project_iam_member" "iam_human_cloudsql_client" {
-  count = trimspace(var.iam_db_login_user_email) != "" ? 1 : 0
+  count = local.should_grant_human_db_project_roles ? 1 : 0
 
   project = var.project_id
   role    = "roles/cloudsql.client"
@@ -235,7 +270,7 @@ resource "google_project_iam_member" "iam_human_cloudsql_client" {
 }
 
 resource "google_project_iam_member" "iam_human_cloudsql_instance_user" {
-  count = trimspace(var.iam_db_login_user_email) != "" ? 1 : 0
+  count = local.should_grant_human_db_project_roles ? 1 : 0
 
   project = var.project_id
   role    = "roles/cloudsql.instanceUser"
@@ -306,13 +341,17 @@ resource "google_cloud_run_v2_service" "control_plane" {
         value = var.github_client_id
       }
 
-      env {
-        name = "GITHUB_CLIENT_SECRET"
+      dynamic "env" {
+        for_each = local.has_github_client_secret ? [1] : []
 
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.github_client_secret.secret_id
-            version = "latest"
+        content {
+          name = "GITHUB_CLIENT_SECRET"
+
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.github_client_secret[0].secret_id
+              version = "latest"
+            }
           }
         }
       }
@@ -322,24 +361,32 @@ resource "google_cloud_run_v2_service" "control_plane" {
         value = var.github_app_id
       }
 
-      env {
-        name = "GITHUB_APP_PRIVATE_KEY"
+      dynamic "env" {
+        for_each = local.has_github_app_private_key ? [1] : []
 
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.github_app_private_key.secret_id
-            version = "latest"
+        content {
+          name = "GITHUB_APP_PRIVATE_KEY"
+
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.github_app_private_key[0].secret_id
+              version = "latest"
+            }
           }
         }
       }
 
-      env {
-        name = "GITHUB_APP_WEBHOOK_SECRET"
+      dynamic "env" {
+        for_each = local.has_github_app_webhook_secret ? [1] : []
 
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.github_app_webhook_secret.secret_id
-            version = "latest"
+        content {
+          name = "GITHUB_APP_WEBHOOK_SECRET"
+
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.github_app_webhook_secret[0].secret_id
+              version = "latest"
+            }
           }
         }
       }

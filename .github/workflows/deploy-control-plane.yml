@@ -41,6 +41,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate required CI variables and secrets
+        env:
+          VAR_GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          VAR_GCP_REGION: ${{ vars.GCP_REGION }}
+          VAR_GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          VAR_GCP_WIF_SERVICE_ACCOUNT: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+          VAR_TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          missing=0
+
+          for name in \
+            VAR_GCP_PROJECT_ID \
+            VAR_GCP_REGION \
+            VAR_GCP_WIF_PROVIDER \
+            VAR_GCP_WIF_SERVICE_ACCOUNT \
+            VAR_TF_STATE_BUCKET
+          do
+            value="${!name}"
+            if [ -z "${value}" ]; then
+              echo "::error::Missing repository variable for ${name}"
+              missing=1
+            fi
+          done
+
+
+
+          if [ "${missing}" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -56,7 +86,8 @@ jobs:
         run: |
           gcloud services enable \
             cloudresourcemanager.googleapis.com \
-            serviceusage.googleapis.com
+            serviceusage.googleapis.com \
+            iam.googleapis.com
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
