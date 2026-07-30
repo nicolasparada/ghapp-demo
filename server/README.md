@@ -259,17 +259,19 @@ Most common cause is audience mismatch.
 Ensure the action requests an ID token with audience exactly equal to `OIDC_AUDIENCE`.
 
 ### Cloud SQL tier error: `Invalid Tier (...) for (ENTERPRISE_PLUS) Edition`
-The Terraform defaults use `sql_edition = "ENTERPRISE"` and `sql_database_version = "POSTGRES_18"`, which supports `db-custom-*` tiers and is cheaper than ENTERPRISE_PLUS.
-If you explicitly set `sql_edition = "ENTERPRISE_PLUS"`, you must choose a compatible `db-perf-optimized-*` tier.
+This PoC Terraform is pinned to Cloud SQL `ENTERPRISE` on PostgreSQL 18 with a `db-custom-*` tier (cheaper than ENTERPRISE_PLUS).
+If you later change Terraform to `ENTERPRISE_PLUS`, you must also switch to a compatible `db-perf-optimized-*` tier.
+
+### Cloud SQL Studio says `enable data_api_access for this instance`
+This Terraform enables Data API access (`ALLOW_DATA_API`). After applying, verify your IAM user has Cloud SQL Studio permissions (`roles/cloudsql.studioUser`) and exists as a `CLOUD_IAM_USER` on the instance.
 
 ### IAM API disabled in CI (`iam.googleapis.com`)
 Enable IAM API for the project and rerun. The CI workflow now pre-enables foundational APIs, but first-time propagation can take a few minutes.
 
 ### Forbidden while applying project IAM bindings
-If your deployer service account cannot modify project IAM policy, keep Terraform bootstrap-friendly defaults:
-- `grant_human_db_project_roles = false` (default)
+This Terraform stack always grants your human IAM user (`parada.nicolas@outlook.com`) Cloud SQL access roles (`cloudsql.client`, `cloudsql.instanceUser`, `cloudsql.studioUser`).
 
-Then grant stronger IAM permissions to deployer and enable this later.
+If apply fails with permission errors, grant the deployer service account project IAM admin rights (as documented in the CI bootstrap steps), then rerun.
 
 ### Secret Manager payload required (`Field [payload] is required`)
 This happens when Terraform tries to create secret versions with empty values.
