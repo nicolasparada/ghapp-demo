@@ -5,39 +5,24 @@ import (
 	"testing"
 )
 
-func TestRenderLineageTreeLines(t *testing.T) {
+func TestConvertLineageTreeToView(t *testing.T) {
 	t.Parallel()
 
 	roots := []lineageTreePayload{
 		{
-			NodeType: "process",
-			PID:      1,
-			Name:     "systemd",
+			NodeType:     "process",
+			PID:          1,
+			Name:         "systemd",
+			DirectEgress: 0,
+			TotalEgress:  3,
 			Children: []lineageTreePayload{
 				{
-					NodeType: "process",
-					PID:      20,
-					Name:     "containerd-shim-runc-v2",
-					Children: []lineageTreePayload{
-						{
-							NodeType: "process",
-							PID:      30,
-							Name:     "run-simulations",
-							Egress: []lineageEgressPayload{
-								{
-									NodeType:    "egress",
-									Destination: "httpbingo.org",
-									Port:        443,
-									Count:       2,
-								},
-							},
-						},
-					},
-				},
-				{
-					NodeType: "process",
-					PID:      40,
-					Name:     "hosted-compute-agent",
+					NodeType:     "process",
+					PID:          20,
+					Name:         "python3.12",
+					Cmdline:      "/usr/bin/python3.12 /work/script.py",
+					DirectEgress: 3,
+					TotalEgress:  3,
 					Egress: []lineageEgressPayload{
 						{
 							NodeType:    "egress",
@@ -45,30 +30,46 @@ func TestRenderLineageTreeLines(t *testing.T) {
 							Port:        53,
 							Count:       1,
 						},
+						{
+							NodeType:    "egress",
+							Destination: "httpbingo.org",
+							Port:        443,
+							Count:       2,
+						},
 					},
 				},
 			},
 		},
 	}
 
-	got := renderLineageTreeLines("workflow · job", roots)
-	want := []string{
-		"workflow · job",
-		"└─ systemd",
-		"   ├─ containerd-shim-runc-v2",
-		"   │  └─ run-simulations",
-		"   │     └─ → httpbingo.org ×2",
-		"   └─ hosted-compute-agent",
-		"      └─ → localhost (dns resolver)",
+	view := convertLineageTreeToView(roots)
+	if len(view) != 1 {
+		t.Fatalf("expected one root view node, got %d", len(view))
 	}
 
-	if len(got) != len(want) {
-		t.Fatalf("unexpected line count: got=%d want=%d\n%v", len(got), len(want), got)
+	root := view[0]
+	if root.Label != "systemd" {
+		t.Fatalf("unexpected root label: %q", root.Label)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("line %d mismatch: got=%q want=%q", i, got[i], want[i])
-		}
+	if len(root.Children) != 1 {
+		t.Fatalf("expected one child, got %d", len(root.Children))
+	}
+
+	child := root.Children[0]
+	if child.Label != "script.py" {
+		t.Fatalf("expected script.py label from cmdline, got %q", child.Label)
+	}
+	if len(child.Egress) != 2 {
+		t.Fatalf("expected 2 egress leaves, got %d", len(child.Egress))
+	}
+	if child.Egress[0].Target != "localhost (dns resolver)" {
+		t.Fatalf("unexpected dns target label: %q", child.Egress[0].Target)
+	}
+	if child.Egress[1].Target != "httpbingo.org" {
+		t.Fatalf("unexpected egress target label: %q", child.Egress[1].Target)
+	}
+	if child.Egress[1].Count != 2 {
+		t.Fatalf("unexpected egress count: %d", child.Egress[1].Count)
 	}
 }
 

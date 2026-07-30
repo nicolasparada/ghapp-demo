@@ -6,3 +6,58 @@
 code {
   font-size: 0.9em;
 }
+
+.lineage-root-label {
+  margin-bottom: 0.5rem;
+}
+
+.lineage-tree,
+.lineage-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.lineage-tree > li {
+  margin: 0.35rem 0;
+}
+
+.lineage-tree ul {
+  margin-top: 0.25rem;
+  margin-left: 1rem;
+  padding-left: 1rem;
+  border-left: 1px solid var(--pico-muted-border-color);
+}
+
+.lineage-process-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.lineage-process-name {
+  font-weight: 600;
+}
+
+.lineage-process-meta {
+  color: var(--pico-muted-color);
+}
+
+.lineage-egress-list {
+  margin-bottom: 0.35rem;
+}
+
+.lineage-egress-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.lineage-egress-target code {
+  font-size: 0.85em;
+}
+
+.lineage-egress-count {
+  color: var(--pico-muted-color);
+}

@@ -99,9 +99,23 @@ type runSummaryView struct {
 	Domains                 []string
 	IPs                     []string
 	URLs                    []string
-	LineageTreeLines        []string
+	LineageRootLabel        string
+	LineageRoots            []lineageTreeNodeView
 	LineageProcessNodeCount int
 	LineageEgressNodeCount  int
+}
+
+type lineageTreeNodeView struct {
+	Label        string
+	DirectEgress int
+	TotalEgress  int
+	Egress       []lineageEgressNodeView
+	Children     []lineageTreeNodeView
+}
+
+type lineageEgressNodeView struct {
+	Target string
+	Count  int
 }
 
 type runSummaryPayload struct {
@@ -864,7 +878,8 @@ func buildRunSummaryView(run types.Run) runSummaryView {
 		Domains:                 domains,
 		IPs:                     ips,
 		URLs:                    urls,
-		LineageTreeLines:        renderLineageTreeLines(formatRunLineageRootLabel(run), payload.LineageTree),
+		LineageRootLabel:        formatRunLineageRootLabel(run),
+		LineageRoots:            convertLineageTreeToView(payload.LineageTree),
 		LineageProcessNodeCount: lineageProcessNodeCount,
 		LineageEgressNodeCount:  lineageEgressNodeCount,
 	}
@@ -1044,48 +1059,31 @@ func formatRunLineageRootLabel(run types.Run) string {
 	}
 }
 
-func renderLineageTreeLines(rootLabel string, roots []lineageTreePayload) []string {
-	label := strings.TrimSpace(rootLabel)
-	if label == "" {
-		label = "run"
+func convertLineageTreeToView(nodes []lineageTreePayload) []lineageTreeNodeView {
+	if len(nodes) == 0 {
+		return nil
 	}
 
-	lines := []string{label}
-	if len(roots) == 0 {
-		return lines
+	out := make([]lineageTreeNodeView, 0, len(nodes))
+	for _, node := range nodes {
+		egress := make([]lineageEgressNodeView, 0, len(node.Egress))
+		for _, e := range node.Egress {
+			egress = append(egress, lineageEgressNodeView{
+				Target: formatEgressTargetLabel(e),
+				Count:  e.Count,
+			})
+		}
+
+		out = append(out, lineageTreeNodeView{
+			Label:        processNodeDisplayLabel(node),
+			DirectEgress: node.DirectEgress,
+			TotalEgress:  node.TotalEgress,
+			Egress:       egress,
+			Children:     convertLineageTreeToView(node.Children),
+		})
 	}
 
-	for i, node := range roots {
-		appendLineageProcessLines(&lines, "", node, i == len(roots)-1)
-	}
-
-	return lines
-}
-
-func appendLineageProcessLines(lines *[]string, base string, node lineageTreePayload, isLast bool) {
-	linePrefix, nextBase := treeBranch(base, isLast)
-	*lines = append(*lines, linePrefix+processNodeDisplayLabel(node))
-
-	childCount := len(node.Children) + len(node.Egress)
-	childIndex := 0
-
-	for _, child := range node.Children {
-		childIndex++
-		appendLineageProcessLines(lines, nextBase, child, childIndex == childCount)
-	}
-
-	for _, egress := range node.Egress {
-		childIndex++
-		egressPrefix, _ := treeBranch(nextBase, childIndex == childCount)
-		*lines = append(*lines, egressPrefix+formatEgressLineLabel(egress))
-	}
-}
-
-func treeBranch(base string, isLast bool) (linePrefix, nextBase string) {
-	if isLast {
-		return base + "└─ ", base + "   "
-	}
-	return base + "├─ ", base + "│  "
+	return out
 }
 
 func processNodeDisplayLabel(node lineageTreePayload) string {
@@ -1124,14 +1122,6 @@ func processNodeDisplayLabel(node lineageTreePayload) string {
 		return "pid " + strconv.FormatInt(node.PID, 10)
 	}
 	return "process"
-}
-
-func formatEgressLineLabel(egress lineageEgressPayload) string {
-	target := formatEgressTargetLabel(egress)
-	if egress.Count > 1 {
-		return "→ " + target + " ×" + strconv.Itoa(egress.Count)
-	}
-	return "→ " + target
 }
 
 func formatEgressTargetLabel(egress lineageEgressPayload) string {
