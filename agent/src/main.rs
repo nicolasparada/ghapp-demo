@@ -12,7 +12,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{HashMap, HashSet, VecDeque};
     use std::env;
     use std::fmt::Write as _;
     use std::fs::{self, File};
@@ -173,15 +173,44 @@ tracepoint:syscalls:sys_enter_connect
 
         let mut backend_name = String::from("none");
         let mut backend = backend;
+        let should_run_loop = backend.is_some();
+
         if let Some(b) = backend.as_ref() {
-            backend_name = format!("bpftrace:{}", b.script_name);
+            backend_name = format!("bpftrace:{}:{}", b.launch_mode.name(), b.script_name);
             log(
                 LogLevel::Info,
                 &format!("capture backend attached: {backend_name}"),
             );
         }
 
-        let should_run_loop = backend.is_some();
+        if let Some(ready_file_path) = cfg.ready_file_path.as_ref() {
+            if should_run_loop {
+                match write_ready_file(ready_file_path, &backend_name, started_unix_nanos) {
+                    Ok(()) => {
+                        log(
+                            LogLevel::Info,
+                            &format!("readiness marker written: {}", ready_file_path.display()),
+                        );
+                    }
+                    Err(err) => {
+                        let msg = format!(
+                            "failed to write readiness marker {}: {err}",
+                            ready_file_path.display()
+                        );
+                        log(LogLevel::Warn, &msg);
+                        run_errors.push(msg);
+                    }
+                }
+            } else {
+                let msg = format!(
+                    "readiness marker not written (backend unavailable): {}",
+                    ready_file_path.display()
+                );
+                log(LogLevel::Warn, &msg);
+                run_errors.push(msg);
+            }
+        }
+
         if !should_run_loop {
             let msg = String::from("nothing to monitor (capture backend is unavailable)");
             log(LogLevel::Warn, &msg);
@@ -199,9 +228,16 @@ tracepoint:syscalls:sys_enter_connect
                 }
 
                 if let Some(b) = backend.as_mut() {
+                    b.drain_pending_messages();
+
                     match b.child.try_wait() {
                         Ok(Some(status)) => {
-                            let msg = format!("capture backend exited early with status: {status}");
+                            let mut msg =
+                                format!("capture backend exited early with status: {status}");
+                            let stderr_summary = b.stderr_tail_summary();
+                            if !stderr_summary.is_empty() {
+                                let _ = write!(msg, " | stderr: {stderr_summary}");
+                            }
                             log(LogLevel::Warn, &msg);
                             run_errors.push(msg);
                             if let Some(mut done) = backend.take() {
@@ -221,7 +257,7 @@ tracepoint:syscalls:sys_enter_connect
                         }
                     }
 
-                    match b.rx.recv_timeout(Duration::from_millis(200)) {
+                    match b.recv_message(Duration::from_millis(200)) {
                         Ok(CaptureMessage::StdoutLine(line)) => match parse_capture_line(&line) {
                             ParsedLine::Event(raw) => {
                                 let lineage =
@@ -260,13 +296,18 @@ tracepoint:syscalls:sys_enter_connect
                             }
                         },
                         Ok(CaptureMessage::StderrLine(line)) => {
+                            b.push_stderr_tail(&line);
                             if cfg.verbose {
                                 log(LogLevel::Debug, &format!("bpftrace: {line}"));
                             }
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            let msg = String::from("capture backend channel disconnected");
+                            let mut msg = String::from("capture backend channel disconnected");
+                            let stderr_summary = b.stderr_tail_summary();
+                            if !stderr_summary.is_empty() {
+                                let _ = write!(msg, " | stderr: {stderr_summary}");
+                            }
                             log(LogLevel::Warn, &msg);
                             run_errors.push(msg);
                             backend = None;
@@ -295,7 +336,15 @@ tracepoint:syscalls:sys_enter_connect
 
             let drain_deadline = Instant::now() + Duration::from_millis(700);
             while Instant::now() < drain_deadline {
-                match b.rx.try_recv() {
+                b.drain_pending_messages();
+
+                let next_message = if let Some(message) = b.pending_messages.pop_front() {
+                    Ok(message)
+                } else {
+                    b.rx.try_recv()
+                };
+
+                match next_message {
                     Ok(CaptureMessage::StdoutLine(line)) => match parse_capture_line(&line) {
                         ParsedLine::Event(raw) => {
                             let lineage = process_cache.lineage_for_pid(raw.pid, MAX_LINEAGE_DEPTH);
@@ -322,7 +371,9 @@ tracepoint:syscalls:sys_enter_connect
                         ParsedLine::Ignored => {}
                         ParsedLine::Invalid(_) => dropped_lines = dropped_lines.saturating_add(1),
                     },
-                    Ok(CaptureMessage::StderrLine(_)) => {}
+                    Ok(CaptureMessage::StderrLine(line)) => {
+                        b.push_stderr_tail(&line);
+                    }
                     Err(mpsc::TryRecvError::Empty) => thread::sleep(Duration::from_millis(20)),
                     Err(mpsc::TryRecvError::Disconnected) => break,
                 }
@@ -374,6 +425,7 @@ tracepoint:syscalls:sys_enter_connect
     #[derive(Debug, Clone)]
     struct Config {
         output_path: PathBuf,
+        ready_file_path: Option<PathBuf>,
         max_events: usize,
         bpftrace_path: String,
         verbose: bool,
@@ -382,6 +434,7 @@ tracepoint:syscalls:sys_enter_connect
     impl Config {
         fn from_args(args: Vec<String>) -> Result<Self, String> {
             let mut output_path = PathBuf::from("run-summary.json");
+            let mut ready_file_path: Option<PathBuf> = None;
             let mut max_events = DEFAULT_MAX_EVENTS;
             let mut bpftrace_path = String::from("bpftrace");
             let mut verbose = false;
@@ -406,6 +459,13 @@ tracepoint:syscalls:sys_enter_connect
                         output_path = PathBuf::from(value);
                     }
 
+                    "--ready-file" => {
+                        i += 1;
+                        let value = args
+                            .get(i)
+                            .ok_or_else(|| String::from("--ready-file requires a value"))?;
+                        ready_file_path = Some(PathBuf::from(value));
+                    }
                     "--max-events" => {
                         i += 1;
                         let value = args
@@ -440,6 +500,7 @@ tracepoint:syscalls:sys_enter_connect
 
             Ok(Self {
                 output_path,
+                ready_file_path,
                 max_events,
                 bpftrace_path,
                 verbose,
@@ -459,11 +520,13 @@ tracepoint:syscalls:sys_enter_connect
              Runs until interrupted by a termination signal.\n\
              \n\
              Options:\n\
-               --output <FILE>            Output JSON file path (default: run-summary.json)\n\
-               --max-events <N>           Max captured events kept in memory/output (default: 200000)\n\
-               --bpftrace <PATH>          bpftrace executable path (default: bpftrace)\n\
-               --verbose                  Verbose logs\n\
-               -h, --help                 Show this help\n"
+               --output <FILE>            Output JSON file path (default: run-summary.json)
+               --ready-file <FILE>        Write readiness marker when eBPF backend is attached
+               --max-events <N>           Max captured events kept in memory/output (default: 200000)
+               --bpftrace <PATH>          bpftrace executable path (default: bpftrace)
+               --verbose                  Verbose logs
+               -h, --help                 Show this help
+"
         );
     }
 
@@ -538,11 +601,86 @@ tracepoint:syscalls:sys_enter_connect
             .filter(|s| !s.is_empty())
     }
 
+    fn write_ready_file(
+        path: &Path,
+        backend_name: &str,
+        started_unix_nanos: u64,
+    ) -> io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut payload = String::new();
+        let _ = write!(
+            payload,
+            "{{\"status\":\"ready\",\"capture_backend\":\"{}\",\"started_unix_nanos\":{},\"ready_unix_nanos\":{}}}",
+            escape_json_string(backend_name),
+            started_unix_nanos,
+            unix_now_nanos()
+        );
+
+        let tmp_path = path.with_extension("tmp");
+        fs::write(&tmp_path, payload.as_bytes())?;
+        fs::rename(tmp_path, path)?;
+        Ok(())
+    }
+
+    fn escape_json_string(value: &str) -> String {
+        let mut escaped = String::with_capacity(value.len());
+        for ch in value.chars() {
+            match ch {
+                '"' => escaped.push_str("\\\""),
+                '\\' => escaped.push_str("\\\\"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                c if c.is_control() => {
+                    let _ = write!(escaped, "\\u{:04x}", c as u32);
+                }
+                c => escaped.push(c),
+            }
+        }
+        escaped
+    }
+
+    const BACKEND_STARTUP_PROBE_TIMEOUT: Duration = Duration::from_millis(1200);
+    const BACKEND_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(50);
+    const BACKEND_STDERR_TAIL_MAX_LINES: usize = 48;
+
+    #[derive(Debug, Clone, Copy)]
+    enum BackendLaunchMode {
+        Direct,
+        Sudo,
+    }
+
+    impl BackendLaunchMode {
+        fn name(self) -> &'static str {
+            match self {
+                Self::Direct => "direct",
+                Self::Sudo => "sudo",
+            }
+        }
+
+        fn build_command(self, bpftrace_path: &str) -> Command {
+            match self {
+                Self::Direct => Command::new(bpftrace_path),
+                Self::Sudo => {
+                    let mut cmd = Command::new("sudo");
+                    cmd.arg("-n").arg("--").arg(bpftrace_path);
+                    cmd
+                }
+            }
+        }
+    }
+
     #[derive(Debug)]
     struct CaptureBackend {
         script_name: &'static str,
+        launch_mode: BackendLaunchMode,
         child: Child,
         rx: mpsc::Receiver<CaptureMessage>,
+        pending_messages: VecDeque<CaptureMessage>,
+        stderr_tail: VecDeque<String>,
         stdout_join: Option<thread::JoinHandle<()>>,
         stderr_join: Option<thread::JoinHandle<()>>,
     }
@@ -572,6 +710,43 @@ tracepoint:syscalls:sys_enter_connect
 
             Ok(())
         }
+
+        fn recv_message(
+            &mut self,
+            timeout: Duration,
+        ) -> Result<CaptureMessage, mpsc::RecvTimeoutError> {
+            if let Some(message) = self.pending_messages.pop_front() {
+                return Ok(message);
+            }
+            self.rx.recv_timeout(timeout)
+        }
+
+        fn drain_pending_messages(&mut self) {
+            while let Ok(message) = self.rx.try_recv() {
+                if let CaptureMessage::StderrLine(line) = &message {
+                    self.push_stderr_tail(line);
+                }
+                self.pending_messages.push_back(message);
+            }
+        }
+
+        fn push_stderr_tail(&mut self, line: &str) {
+            if line.trim().is_empty() {
+                return;
+            }
+            if self.stderr_tail.len() >= BACKEND_STDERR_TAIL_MAX_LINES {
+                let _ = self.stderr_tail.pop_front();
+            }
+            self.stderr_tail.push_back(line.to_string());
+        }
+
+        fn stderr_tail_summary(&self) -> String {
+            self.stderr_tail
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" | ")
+        }
     }
 
     #[derive(Debug)]
@@ -581,17 +756,33 @@ tracepoint:syscalls:sys_enter_connect
     }
 
     fn start_capture_backend(bpftrace_path: &str, verbose: bool) -> Result<CaptureBackend, String> {
-        let candidates = [
+        let scripts = [
             ("connect-v4v6", BPFTRACE_SCRIPT_CONNECT_V4V6),
             ("connect-v4-only", BPFTRACE_SCRIPT_CONNECT_V4_ONLY),
         ];
 
+        let launches = if env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true") {
+            [BackendLaunchMode::Sudo, BackendLaunchMode::Direct]
+        } else {
+            [BackendLaunchMode::Direct, BackendLaunchMode::Sudo]
+        };
+
         let mut errors = Vec::new();
 
-        for (name, script) in candidates {
-            match spawn_bpftrace_backend(bpftrace_path, script, name, verbose) {
-                Ok(backend) => return Ok(backend),
-                Err(err) => errors.push(format!("{name}: {err}")),
+        for launch_mode in launches {
+            for (script_name, script) in scripts {
+                match spawn_bpftrace_backend(
+                    bpftrace_path,
+                    script,
+                    script_name,
+                    launch_mode,
+                    verbose,
+                ) {
+                    Ok(backend) => return Ok(backend),
+                    Err(err) => {
+                        errors.push(format!("{}:{}: {err}", launch_mode.name(), script_name))
+                    }
+                }
             }
         }
 
@@ -602,9 +793,10 @@ tracepoint:syscalls:sys_enter_connect
         bpftrace_path: &str,
         script: &str,
         script_name: &'static str,
+        launch_mode: BackendLaunchMode,
         verbose: bool,
     ) -> Result<CaptureBackend, String> {
-        let mut command = Command::new(bpftrace_path);
+        let mut command = launch_mode.build_command(bpftrace_path);
         command
             .arg("-q")
             .arg("-e")
@@ -644,17 +836,61 @@ tracepoint:syscalls:sys_enter_connect
         if verbose {
             log(
                 LogLevel::Debug,
-                &format!("spawned bpftrace backend with script {script_name}"),
+                &format!(
+                    "spawned bpftrace backend with script {} using {} launch",
+                    script_name,
+                    launch_mode.name()
+                ),
             );
         }
 
-        Ok(CaptureBackend {
+        let mut backend = CaptureBackend {
             script_name,
+            launch_mode,
             child,
             rx,
+            pending_messages: VecDeque::new(),
+            stderr_tail: VecDeque::new(),
             stdout_join: Some(stdout_join),
             stderr_join: Some(stderr_join),
-        })
+        };
+
+        wait_for_backend_startup(&mut backend)?;
+
+        Ok(backend)
+    }
+
+    fn wait_for_backend_startup(backend: &mut CaptureBackend) -> Result<(), String> {
+        let deadline = Instant::now() + BACKEND_STARTUP_PROBE_TIMEOUT;
+
+        loop {
+            backend.drain_pending_messages();
+
+            match backend.child.try_wait() {
+                Ok(Some(status)) => {
+                    let stderr = backend.stderr_tail_summary();
+                    let _ = backend.stop();
+                    let mut message = format!("exited during startup with status: {status}");
+                    if !stderr.is_empty() {
+                        let _ = write!(message, " | stderr: {stderr}");
+                    }
+                    return Err(message);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    let _ = backend.stop();
+                    return Err(format!("failed probing startup status: {err}"));
+                }
+            }
+
+            if Instant::now() >= deadline {
+                break;
+            }
+
+            thread::sleep(BACKEND_STARTUP_POLL_INTERVAL);
+        }
+
+        Ok(())
     }
 
     fn stream_lines<R, F>(reader: R, mut on_line: F)

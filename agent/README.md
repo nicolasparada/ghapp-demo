@@ -29,15 +29,18 @@ cargo build --release
 ### Foreground capture (until interrupted)
 
 ```sh
-./target/release/egress-agent --output run-summary.json
+./target/release/egress-agent --output run-summary.json --ready-file agent.ready.json
 # stop with Ctrl+C (SIGINT) when done
 ```
 
 ### Background capture (recommended for CI)
 
 ```sh
-sudo ./target/release/egress-agent --output run-summary.json >agent.out.log 2>agent.err.log &
+sudo ./target/release/egress-agent --output run-summary.json --ready-file agent.ready.json >agent.out.log 2>agent.err.log &
 AGENT_PID=$!
+
+# wait readiness (optional)
+while [ ! -f agent.ready.json ]; do sleep 0.2; done
 
 # ... run build/test steps ...
 
@@ -105,6 +108,7 @@ Each release includes:
 - Capture scope is **system-wide** (no PID filter), so newly launched container processes are observed as well.
 - Logs are split by level: `INFO`/`DEBUG` to stdout, `WARN`/`ERROR` to stderr.
 - The summary file is written on graceful shutdown/finish (handled termination signal).
+- `--ready-file <FILE>` writes a readiness marker only after backend startup succeeds.
 - If the richer IPv4+IPv6 script fails to attach, the agent falls back to IPv4-only.
 - If eBPF backend cannot start, the agent still exits successfully and writes a summary with errors.
 - The agent avoids `panic!` and tries to keep running even under partial failures.

@@ -1,4 +1,4 @@
-import { access, chmod, constants, mkdir, writeFile } from "node:fs/promises";
+import { access, chmod, constants, mkdir, readFile, writeFile } from "node:fs/promises";
 import { closeSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import {
   STATE_AGENT_PID,
   STATE_CONTROL_PLANE_BASE_URL,
+  STATE_READY_PATH,
   STATE_STDERR_LOG_PATH,
   STATE_STDOUT_LOG_PATH,
   STATE_SUMMARY_PATH,
@@ -18,9 +19,13 @@ import {
   readOptionalInputAgentVersion,
   readOptionalInputControlPlaneBaseUrl,
   saveState,
+  sleep,
 } from "./shared.js";
 
 const AGENT_CACHE_PREFIX = "ghapp-egress-agent";
+const AGENT_READY_TIMEOUT_MS = 20_000;
+const AGENT_READY_POLL_INTERVAL_MS = 200;
+const AGENT_LOG_TAIL_LINES = 24;
 
 type TargetAsset = {
   readonly targetArch: "amd64" | "arm64";
@@ -45,6 +50,7 @@ async function runMain(): Promise<void> {
   await mkdir(sessionDir, { recursive: true });
 
   const summaryPath = join(sessionDir, "run-summary.json");
+  const readyPath = join(sessionDir, "agent.ready.json");
   const stdoutLogPath = join(sessionDir, "agent.stdout.log");
   const stderrLogPath = join(sessionDir, "agent.stderr.log");
 
@@ -66,7 +72,7 @@ async function runMain(): Promise<void> {
   const stderrFd = openSync(stderrLogPath, "a");
 
   try {
-    const child = spawn(agentBinaryPath, ["--output", summaryPath], {
+    const child = spawn(agentBinaryPath, ["--output", summaryPath, "--ready-file", readyPath], {
       detached: true,
       stdio: ["ignore", stdoutFd, stderrFd],
       env: process.env,
@@ -82,6 +88,7 @@ async function runMain(): Promise<void> {
 
     saveState(STATE_AGENT_PID, String(pid));
     saveState(STATE_SUMMARY_PATH, summaryPath);
+    saveState(STATE_READY_PATH, readyPath);
     saveState(STATE_STDOUT_LOG_PATH, stdoutLogPath);
     saveState(STATE_STDERR_LOG_PATH, stderrLogPath);
     saveState(STATE_CONTROL_PLANE_BASE_URL, controlPlaneBaseUrl);
@@ -89,6 +96,13 @@ async function runMain(): Promise<void> {
     log("INFO", `started egress agent in background (pid=${pid})`);
     log("INFO", `agent version source: ${agentVersion}`);
     log("INFO", `agent summary will be written to ${summaryPath}`);
+
+    await waitForAgentReadiness({
+      pid,
+      readyPath,
+      stdoutLogPath,
+      stderrLogPath,
+    });
   } finally {
     safeClose(stdoutFd);
     safeClose(stderrFd);
@@ -248,6 +262,93 @@ async function extractArchive(archivePath: string, destinationDir: string): Prom
       );
     });
   });
+}
+
+async function waitForAgentReadiness(args: {
+  readonly pid: number;
+  readonly readyPath: string;
+  readonly stdoutLogPath: string;
+  readonly stderrLogPath: string;
+}): Promise<void> {
+  const deadline = Date.now() + AGENT_READY_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    if (await fileExists(args.readyPath)) {
+      let readinessText = "";
+      try {
+        readinessText = (await readFile(args.readyPath, { encoding: "utf8" })).trim();
+      } catch {
+        readinessText = "";
+      }
+
+      if (readinessText !== "") {
+        log("INFO", `agent readiness confirmed: ${readinessText}`);
+      } else {
+        log("INFO", `agent readiness confirmed via file: ${args.readyPath}`);
+      }
+      return;
+    }
+
+    const exited = didProcessExit(args.pid);
+    if (exited) {
+      const stderrTail = await readLogTail(args.stderrLogPath, AGENT_LOG_TAIL_LINES);
+      const stdoutTail = await readLogTail(args.stdoutLogPath, AGENT_LOG_TAIL_LINES);
+      log(
+        "WARN",
+        `agent exited before readiness probe succeeded (pid=${args.pid}); egress capture may be unavailable`,
+      );
+      if (stderrTail !== "") {
+        log("WARN", `agent stderr tail:\n${stderrTail}`);
+      } else if (stdoutTail !== "") {
+        log("WARN", `agent stdout tail:\n${stdoutTail}`);
+      }
+      return;
+    }
+
+    await sleep(AGENT_READY_POLL_INTERVAL_MS);
+  }
+
+  const stderrTail = await readLogTail(args.stderrLogPath, AGENT_LOG_TAIL_LINES);
+  log(
+    "WARN",
+    `agent readiness timed out after ${AGENT_READY_TIMEOUT_MS}ms; continuing fail-open`,
+  );
+  if (stderrTail !== "") {
+    log("WARN", `agent stderr tail while waiting readiness:\n${stderrTail}`);
+  }
+}
+
+function didProcessExit(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error: unknown) {
+    if (error instanceof Error && "code" in error) {
+      const maybeCode = (error as Error & { readonly code?: string }).code;
+      if (maybeCode === "EPERM") {
+        return false;
+      }
+      if (maybeCode === "ESRCH") {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+async function readLogTail(path: string, maxLines: number): Promise<string> {
+  try {
+    const content = await readFile(path, { encoding: "utf8" });
+    const lines = content
+      .replaceAll("\r\n", "\n")
+      .split("\n")
+      .filter((line) => line !== "");
+
+    const tail = lines.slice(-maxLines);
+    return tail.join("\n");
+  } catch {
+    return "";
+  }
 }
 
 void runMain().catch((error: unknown) => {

@@ -8,6 +8,7 @@ export const DEFAULT_AGENT_VERSION = "latest";
 
 export const STATE_AGENT_PID = "agent_pid";
 export const STATE_SUMMARY_PATH = "summary_path";
+export const STATE_READY_PATH = "ready_path";
 export const STATE_STDOUT_LOG_PATH = "stdout_log_path";
 export const STATE_STDERR_LOG_PATH = "stderr_log_path";
 export const STATE_CONTROL_PLANE_BASE_URL = "control_plane_base_url";
