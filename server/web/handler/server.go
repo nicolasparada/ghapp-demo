@@ -70,19 +70,11 @@ type connectData struct {
 	GitHubAppSettingsURL string
 }
 
-type projectRunRow struct {
-	Run               types.Run
-	DestinationCount  int
-	LineageNodeCount  int
-	EventCount        int
-	HasDetailsSummary bool
-}
-
 type projectData struct {
 	pageData
 	Project types.Project
 	Repos   []string
-	Runs    []projectRunRow
+	Runs    []types.Run
 }
 
 type runDetailData struct {
@@ -93,18 +85,9 @@ type runDetailData struct {
 }
 
 type runSummaryView struct {
-	CaptureBackend          string
-	TotalEvents             int
-	DroppedEvents           int
-	DroppedLines            int
-	ErrorMessages           []string
-	Domains                 []string
-	IPs                     []string
-	URLs                    []string
-	LineageRootLabel        string
-	LineageRoots            []lineageTreeNodeView
-	LineageProcessNodeCount int
-	LineageEgressNodeCount  int
+	LineageRootLabel string
+	LineageRoots     []lineageTreeNodeView
+	ErrorMessages    []string
 }
 
 type lineageTreeNodeView struct {
@@ -182,9 +165,6 @@ var (
 	errMissingUserContext = errors.New("missing user in request context")
 	pullRefPattern        = regexp.MustCompile(`^refs/pull/(\d+)/(merge|head)$`)
 	sha256HexPattern      = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	ipv4Pattern           = regexp.MustCompile(`^(?:\d{1,3}\.){3}\d{1,3}$`)
-	hostPortSuffixPattern = regexp.MustCompile(`:[0-9]+$`)
-	domainPattern         = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 )
 
 func UserFromContext(ctx context.Context) *types.User {
@@ -481,23 +461,11 @@ func (a *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runRows := make([]projectRunRow, 0, len(runs))
-	for _, run := range runs {
-		eventCount, destinationCount, lineageNodeCount, hasSummary := summarizeRunForList(run.EgressJSON)
-		runRows = append(runRows, projectRunRow{
-			Run:               run,
-			EventCount:        eventCount,
-			DestinationCount:  destinationCount,
-			LineageNodeCount:  lineageNodeCount,
-			HasDetailsSummary: hasSummary,
-		})
-	}
-
 	if err := a.renderer.Render(w, "project.html", projectData{
 		pageData: pageData{Title: project.Name, CurrentUser: user},
 		Project:  project,
 		Repos:    repos,
-		Runs:     runRows,
+		Runs:     runs,
 	}); err != nil {
 		a.renderError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -831,31 +799,6 @@ func validateRunSummaryPayload(raw []byte) error {
 	return nil
 }
 
-func summarizeRunForList(raw json.RawMessage) (eventCount, destinationCount, lineageNodeCount int, hasSummary bool) {
-	var payload runSummaryPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return 0, 0, 0, false
-	}
-
-	eventCount = payload.TotalEvents
-	if eventCount <= 0 {
-		eventCount = len(payload.Events)
-	}
-
-	domains, ips, urls := extractEgressTargetsFromTree(payload.LineageTree)
-	if len(domains)+len(ips)+len(urls) == 0 {
-		domains, ips, urls = extractEgressTargets(payload.Events)
-	}
-	destinationCount = len(domains) + len(ips) + len(urls)
-
-	lineageNodeCount = countLineageProcessNodes(payload.LineageTree) + countLineageEgressNodes(payload.LineageTree)
-	if lineageNodeCount == 0 {
-		lineageNodeCount = countLineageEventNodes(payload.Events)
-	}
-
-	return eventCount, destinationCount, lineageNodeCount, true
-}
-
 func buildRunSummaryView(run types.Run) runSummaryView {
 	var payload runSummaryPayload
 	if err := json.Unmarshal(run.EgressJSON, &payload); err != nil {
@@ -864,186 +807,11 @@ func buildRunSummaryView(run types.Run) runSummaryView {
 		}
 	}
 
-	domains, ips, urls := extractEgressTargetsFromTree(payload.LineageTree)
-	if len(domains)+len(ips)+len(urls) == 0 {
-		domains, ips, urls = extractEgressTargets(payload.Events)
+	return runSummaryView{
+		LineageRootLabel: formatRunLineageRootLabel(run),
+		LineageRoots:     convertLineageTreeToView(payload.LineageTree),
+		ErrorMessages:    payload.Errors,
 	}
-
-	lineageProcessNodeCount := countLineageProcessNodes(payload.LineageTree)
-	lineageEgressNodeCount := countLineageEgressNodes(payload.LineageTree)
-
-	view := runSummaryView{
-		CaptureBackend:          payload.CaptureBackend,
-		TotalEvents:             payload.TotalEvents,
-		DroppedEvents:           payload.DroppedEvents,
-		DroppedLines:            payload.DroppedLines,
-		ErrorMessages:           payload.Errors,
-		Domains:                 domains,
-		IPs:                     ips,
-		URLs:                    urls,
-		LineageRootLabel:        formatRunLineageRootLabel(run),
-		LineageRoots:            convertLineageTreeToView(payload.LineageTree),
-		LineageProcessNodeCount: lineageProcessNodeCount,
-		LineageEgressNodeCount:  lineageEgressNodeCount,
-	}
-
-	if view.TotalEvents <= 0 {
-		view.TotalEvents = len(payload.Events)
-	}
-
-	if len(payload.LineageTree) == 0 {
-		view.ErrorMessages = append(view.ErrorMessages, "lineage tree not present in this run payload")
-	}
-
-	return view
-}
-
-func extractEgressTargetsFromTree(roots []lineageTreePayload) (domains, ips, urls []string) {
-	domainSet := map[string]struct{}{}
-	ipSet := map[string]struct{}{}
-	urlSet := map[string]struct{}{}
-
-	collectLineageEgress(roots, func(egress lineageEgressPayload) {
-		classifyEgressValue(egress.Destination, domainSet, ipSet, urlSet, &domains, &ips, &urls)
-	})
-
-	return domains, ips, urls
-}
-
-func collectLineageEgress(roots []lineageTreePayload, onEgress func(egress lineageEgressPayload)) {
-	for _, node := range roots {
-		for _, egress := range node.Egress {
-			onEgress(egress)
-		}
-		if len(node.Children) > 0 {
-			collectLineageEgress(node.Children, onEgress)
-		}
-	}
-}
-
-func extractEgressTargets(events []runEventPayload) (domains, ips, urls []string) {
-	domainSet := map[string]struct{}{}
-	ipSet := map[string]struct{}{}
-	urlSet := map[string]struct{}{}
-
-	for _, event := range events {
-		classifyEgressValue(event.Destination, domainSet, ipSet, urlSet, &domains, &ips, &urls)
-	}
-
-	return domains, ips, urls
-}
-
-func classifyEgressValue(raw string, domainSet, ipSet, urlSet map[string]struct{}, domains, ips, urls *[]string) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return
-	}
-
-	lower := strings.ToLower(value)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		if _, ok := urlSet[value]; !ok {
-			urlSet[value] = struct{}{}
-			*urls = append(*urls, value)
-		}
-		host := extractHostFromURL(value)
-		if host != "" {
-			classifyHost(host, domainSet, ipSet, domains, ips)
-		}
-		return
-	}
-
-	classifyHost(value, domainSet, ipSet, domains, ips)
-}
-
-func extractHostFromURL(raw string) string {
-	withoutScheme := raw
-	if idx := strings.Index(raw, "://"); idx >= 0 {
-		withoutScheme = raw[idx+3:]
-	}
-	if idx := strings.IndexAny(withoutScheme, "/?#"); idx >= 0 {
-		withoutScheme = withoutScheme[:idx]
-	}
-	if at := strings.LastIndex(withoutScheme, "@"); at >= 0 {
-		withoutScheme = withoutScheme[at+1:]
-	}
-	return normalizeHost(withoutScheme)
-}
-
-func classifyHost(raw string, domainSet, ipSet map[string]struct{}, domains, ips *[]string) {
-	host := normalizeHost(raw)
-	if host == "" {
-		return
-	}
-
-	if isLikelyIPv4(host) || isLikelyIPv6(host) {
-		if _, ok := ipSet[host]; !ok {
-			ipSet[host] = struct{}{}
-			*ips = append(*ips, host)
-		}
-		return
-	}
-
-	if isLikelyDomain(host) {
-		if _, ok := domainSet[host]; !ok {
-			domainSet[host] = struct{}{}
-			*domains = append(*domains, host)
-		}
-	}
-}
-
-func normalizeHost(raw string) string {
-	host := strings.ToLower(strings.TrimSpace(raw))
-	if host == "" {
-		return ""
-	}
-
-	if strings.HasPrefix(host, "[") && strings.Contains(host, "]") {
-		end := strings.Index(host, "]")
-		if end > 1 {
-			return host[1:end]
-		}
-	}
-
-	if strings.Count(host, ":") == 1 && hostPortSuffixPattern.MatchString(host) {
-		host = hostPortSuffixPattern.ReplaceAllString(host, "")
-	}
-
-	host = strings.TrimSuffix(host, ".")
-	return host
-}
-
-func isLikelyIPv4(host string) bool {
-	if !ipv4Pattern.MatchString(host) {
-		return false
-	}
-	parts := strings.Split(host, ".")
-	if len(parts) != 4 {
-		return false
-	}
-	for _, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 0 || n > 255 {
-			return false
-		}
-	}
-	return true
-}
-
-func isLikelyIPv6(host string) bool {
-	if strings.Count(host, ":") < 2 {
-		return false
-	}
-	for _, r := range host {
-		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || r == ':' || r == '.' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func isLikelyDomain(host string) bool {
-	return domainPattern.MatchString(host)
 }
 
 func formatRunLineageRootLabel(run types.Run) string {
@@ -1128,9 +896,11 @@ func processNodeDisplayLabel(node lineageTreePayload) string {
 }
 
 func formatEgressTargetLabel(egress lineageEgressPayload) string {
-	host := normalizeHost(egress.Destination)
-	if host == "" {
-		host = strings.TrimSpace(egress.Destination)
+	host := strings.ToLower(strings.TrimSpace(egress.Destination))
+	// strip trailing dot and port suffix (e.g. "host:443" → "host")
+	host = strings.TrimSuffix(host, ".")
+	if idx := strings.LastIndex(host, ":"); idx >= 0 && !strings.HasPrefix(host, "[") {
+		host = host[:idx]
 	}
 	if host == "" {
 		host = "unknown"
@@ -1145,35 +915,6 @@ func formatEgressTargetLabel(egress lineageEgressPayload) string {
 func isLocalhostHost(host string) bool {
 	h := strings.TrimSpace(strings.ToLower(host))
 	return h == "localhost" || h == "127.0.0.1" || h == "127.0.0.53" || h == "::1"
-}
-
-func countLineageProcessNodes(nodes []lineageTreePayload) int {
-	total := 0
-	for _, node := range nodes {
-		total++
-		total += countLineageProcessNodes(node.Children)
-	}
-	return total
-}
-
-func countLineageEgressNodes(nodes []lineageTreePayload) int {
-	total := 0
-	for _, node := range nodes {
-		total += len(node.Egress)
-		total += countLineageEgressNodes(node.Children)
-	}
-	return total
-}
-
-func countLineageEventNodes(events []runEventPayload) int {
-	seen := map[string]struct{}{}
-	for _, event := range events {
-		for _, node := range event.Lineage {
-			key := strconv.FormatInt(node.PID, 10) + ":" + strings.TrimSpace(node.Name)
-			seen[key] = struct{}{}
-		}
-	}
-	return len(seen)
 }
 
 func configuredGitHubAppSettingsURL(settingsURL string, installURL string) string {

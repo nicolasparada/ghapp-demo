@@ -4,26 +4,20 @@
   <li>
     <div class="lineage-process-row">
       <span class="lineage-process-name">{{ .Label }}</span>
-      <small class="lineage-process-meta">
-        {{ .TotalEgress }} egress event{{ if ne .TotalEgress 1 }}s{{ end }}
-        {{ if and (gt .DirectEgress 0) (ne .DirectEgress .TotalEgress) }}· direct {{ .DirectEgress }}{{ end }}
-      </small>
+      {{ if gt .TotalEgress 0 }}
+      <small class="lineage-process-meta">{{ .TotalEgress }} egress{{ if and (gt .DirectEgress 0) (ne .DirectEgress .TotalEgress) }}, {{ .DirectEgress }} direct{{ end }}</small>
+      {{ end }}
     </div>
-
     {{ if .Egress }}
     <ul class="lineage-egress-list">
       {{ range .Egress }}
       <li class="lineage-egress-row">
-        <span class="lineage-egress-target"><code>{{ .Target }}</code></span>
-        {{ if gt .Count 1 }}<small class="lineage-egress-count">×{{ .Count }}</small>{{ end }}
+        <code>{{ .Target }}</code>{{ if gt .Count 1 }} <small class="lineage-egress-count muted">×{{ .Count }}</small>{{ end }}
       </li>
       {{ end }}
     </ul>
     {{ end }}
-
-    {{ if .Children }}
-      {{ template "lineageNodes" .Children }}
-    {{ end }}
+    {{ if .Children }}{{ template "lineageNodes" .Children }}{{ end }}
   </li>
   {{ end }}
 </ul>
@@ -31,89 +25,30 @@
 
 {{ define "content" }}
 <header>
-  <h1>Run details</h1>
-  <p>Project: <strong>{{ .Project.Name }}</strong></p>
-  <p><a href="/projects/{{ .Project.Slug }}">Back to project</a></p>
+  <h1>{{ .Summary.LineageRootLabel }}</h1>
+  <p>
+    <code>{{ .Run.RepoFullName }}</code>
+    <code class="sha">{{ shortSHA .Run.CommitSHA }}</code>
+    {{ if .Run.Branch }}<code>{{ .Run.Branch }}</code>{{ end }}
+    {{ if .Run.Actor }}<span class="muted">by {{ .Run.Actor }}</span>{{ end }}
+    {{ if .Run.EventName }}<span class="muted">· {{ .Run.EventName }}</span>{{ end }}
+    <span class="muted">· {{ fmtTime .Run.CreatedAt }}</span>
+  </p>
+  <p><a href="/projects/{{ .Project.Slug }}">← {{ .Project.Name }}</a></p>
 </header>
 
-<section>
-  <h2>Metadata</h2>
-  <table>
-    <tbody>
-      <tr><th>ID</th><td><code>{{ .Run.ID }}</code></td></tr>
-      <tr><th>Repository</th><td><code>{{ .Run.RepoFullName }}</code></td></tr>
-      <tr><th>Commit</th><td><code>{{ .Run.CommitSHA }}</code></td></tr>
-      <tr><th>Workflow</th><td>{{ .Run.WorkflowName }}</td></tr>
-      <tr><th>Job</th><td>{{ .Run.JobName }}</td></tr>
-      <tr><th>Event</th><td>{{ .Run.EventName }}</td></tr>
-      <tr><th>Actor</th><td>{{ .Run.Actor }}</td></tr>
-      <tr><th>Branch/Ref</th><td><code>{{ .Run.Branch }}</code></td></tr>
-      <tr><th>Captured at</th><td>{{ fmtTime .Run.CreatedAt }}</td></tr>
-      <tr><th>Backend</th><td><code>{{ .Summary.CaptureBackend }}</code></td></tr>
-      <tr><th>Events</th><td>{{ .Summary.TotalEvents }}</td></tr>
-      <tr><th>Dropped events</th><td>{{ .Summary.DroppedEvents }}</td></tr>
-      <tr><th>Dropped lines</th><td>{{ .Summary.DroppedLines }}</td></tr>
-      <tr><th>Lineage process nodes</th><td>{{ .Summary.LineageProcessNodeCount }}</td></tr>
-      <tr><th>Lineage egress nodes</th><td>{{ .Summary.LineageEgressNodeCount }}</td></tr>
-    </tbody>
-  </table>
-</section>
-
-<section>
-  <h2>Egress destinations</h2>
-
-  <h3>Domains</h3>
-  {{ if .Summary.Domains }}
-  <ul>
-    {{ range .Summary.Domains }}
-    <li><code>{{ . }}</code></li>
-    {{ end }}
-  </ul>
-  {{ else }}
-  <p>No domains detected.</p>
-  {{ end }}
-
-  <h3>IPs</h3>
-  {{ if .Summary.IPs }}
-  <ul>
-    {{ range .Summary.IPs }}
-    <li><code>{{ . }}</code></li>
-    {{ end }}
-  </ul>
-  {{ else }}
-  <p>No IPs detected.</p>
-  {{ end }}
-
-  <h3>URLs</h3>
-  {{ if .Summary.URLs }}
-  <ul>
-    {{ range .Summary.URLs }}
-    <li><code>{{ . }}</code></li>
-    {{ end }}
-  </ul>
-  {{ else }}
-  <p>No URLs detected.</p>
-  {{ end }}
-</section>
-
-<section>
-  <h2>Lineage tree</h2>
-  <p class="lineage-root-label"><strong>{{ .Summary.LineageRootLabel }}</strong></p>
-  {{ if .Summary.LineageRoots }}
-    {{ template "lineageNodes" .Summary.LineageRoots }}
-  {{ else }}
-  <p>No lineage tree available.</p>
-  {{ end }}
-</section>
+{{ if .Summary.LineageRoots }}
+  {{ template "lineageNodes" .Summary.LineageRoots }}
+{{ else }}
+<p class="muted">No lineage tree available.</p>
+{{ end }}
 
 {{ if .Summary.ErrorMessages }}
-<section>
-  <h2>Summary warnings</h2>
+<details>
+  <summary class="muted">Warnings ({{ len .Summary.ErrorMessages }})</summary>
   <ul>
-    {{ range .Summary.ErrorMessages }}
-    <li>{{ . }}</li>
-    {{ end }}
+    {{ range .Summary.ErrorMessages }}<li>{{ . }}</li>{{ end }}
   </ul>
-</section>
+</details>
 {{ end }}
 {{ end }}

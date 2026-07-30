@@ -1,41 +1,25 @@
 {{ define "content" }}
 <header>
   <h1>Dashboard</h1>
-  <p>Hi @{{ .CurrentUser.Login }}, create a project to organize repository runs.</p>
 </header>
 
 <section>
-  <h2>Create project</h2>
-  <form method="post" action="/projects">
-    <label for="name">Project name</label>
-    <input id="name" name="name" placeholder="Acme Backend" required />
-    <button type="submit">Create project</button>
+  <form method="post" action="/projects" style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap;">
+    <div>
+      <label for="name">New project</label>
+      <input id="name" name="name" placeholder="My project" required style="margin-bottom:0;" />
+    </div>
+    <button type="submit" style="margin-bottom:var(--pico-spacing);">Create</button>
   </form>
 </section>
 
-<section>
-  <h2>Your projects</h2>
-  {{ if .Projects }}
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Slug</th>
-        <th>Created</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{ range .Projects }}
-      <tr>
-        <td><a href="/projects/{{ .Slug }}">{{ .Name }}</a></td>
-        <td><code>{{ .Slug }}</code></td>
-        <td>{{ fmtTime .CreatedAt }}</td>
-      </tr>
-      {{ end }}
-    </tbody>
-  </table>
-  {{ else }}
-  <p>No projects yet.</p>
+{{ if .Projects }}
+<ul class="project-list">
+  {{ range .Projects }}
+  <li><a href="/projects/{{ .Slug }}">{{ .Name }}</a> <small class="muted">{{ .Slug }}</small></li>
   {{ end }}
-</section>
+</ul>
+{{ else }}
+<p class="muted">No projects yet.</p>
+{{ end }}
 {{ end }}

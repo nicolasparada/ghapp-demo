@@ -4,13 +4,51 @@
 }
 
 code {
-  font-size: 0.9em;
+  font-size: 0.875em;
 }
 
-.lineage-root-label {
-  margin-bottom: 0.5rem;
+.muted {
+  color: var(--pico-muted-color);
 }
 
+/* Dashboard */
+.project-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.project-list li {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.project-list li:last-child {
+  border-bottom: none;
+}
+
+/* Project runs table */
+.repos-line {
+  margin-bottom: 1.5rem;
+}
+
+.runs-table {
+  width: 100%;
+}
+
+.runs-table .sha {
+  font-size: 0.8em;
+  letter-spacing: 0.02em;
+}
+
+.runs-table .workflow-job {
+  max-width: 24rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Run detail lineage tree */
 .lineage-tree,
 .lineage-tree ul {
   list-style: none;
@@ -19,21 +57,20 @@ code {
 }
 
 .lineage-tree > li {
-  margin: 0.35rem 0;
+  margin: 0.4rem 0;
 }
 
 .lineage-tree ul {
-  margin-top: 0.25rem;
+  margin-top: 0.2rem;
   margin-left: 1rem;
-  padding-left: 1rem;
-  border-left: 1px solid var(--pico-muted-border-color);
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--pico-muted-border-color);
 }
 
 .lineage-process-row {
   display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
 }
 
 .lineage-process-name {
@@ -41,23 +78,22 @@ code {
 }
 
 .lineage-process-meta {
+  font-size: 0.8em;
   color: var(--pico-muted-color);
 }
 
 .lineage-egress-list {
-  margin-bottom: 0.35rem;
+  margin-top: 0.15rem;
+  margin-bottom: 0.25rem;
 }
 
 .lineage-egress-row {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-}
-
-.lineage-egress-target code {
-  font-size: 0.85em;
+  gap: 0.4rem;
+  padding: 0.05rem 0;
 }
 
 .lineage-egress-count {
-  color: var(--pico-muted-color);
+  font-size: 0.8em;
 }

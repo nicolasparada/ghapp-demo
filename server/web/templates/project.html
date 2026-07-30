@@ -1,64 +1,45 @@
 {{ define "content" }}
 <header>
   <h1>{{ .Project.Name }}</h1>
-  <p><code>{{ .Project.Slug }}</code></p>
-  <p>
-    <a href="/projects/{{ .Project.Slug }}/connect" role="button" class="secondary">Connect repositories</a>
-  </p>
+  <nav>
+    <a href="/projects/{{ .Project.Slug }}/connect" role="button" class="secondary outline">Connect repositories</a>
+  </nav>
 </header>
 
-<section>
-  <h2>Linked repositories</h2>
-  {{ if .Repos }}
-  <ul>
-    {{ range .Repos }}
-    <li><code>{{ . }}</code></li>
-    {{ end }}
-  </ul>
-  {{ else }}
-  <p>No repositories linked to this project yet.</p>
-  {{ end }}
-</section>
+{{ if .Repos }}
+<p class="muted repos-line">
+  {{ range $i, $r := .Repos }}{{ if $i }} · {{ end }}<code>{{ $r }}</code>{{ end }}
+</p>
+{{ else }}
+<p class="muted">No repositories linked yet. <a href="/projects/{{ .Project.Slug }}/connect">Connect one</a>.</p>
+{{ end }}
 
-<section>
-  <h2>Recent runs</h2>
-  {{ if .Runs }}
-  <table>
-    <thead>
-      <tr>
-        <th>Repo</th>
-        <th>Commit</th>
-        <th>Workflow</th>
-        <th>Job</th>
-        <th>Event</th>
-        <th>Egress</th>
-        <th>Created</th>
-        <th>Details</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{ range .Runs }}
-      <tr>
-        <td><code>{{ .Run.RepoFullName }}</code></td>
-        <td><code>{{ shortSHA .Run.CommitSHA }}</code></td>
-        <td>{{ .Run.WorkflowName }}</td>
-        <td>{{ .Run.JobName }}</td>
-        <td>{{ .Run.EventName }}</td>
-        <td>
-          {{ if .HasDetailsSummary }}
-            {{ .EventCount }} events · {{ .DestinationCount }} destinations · {{ .LineageNodeCount }} lineage nodes
-          {{ else }}
-            summary unavailable
-          {{ end }}
-        </td>
-        <td>{{ fmtTime .Run.CreatedAt }}</td>
-        <td><a href="/projects/{{ $.Project.Slug }}/runs/{{ .Run.ID }}">View</a></td>
-      </tr>
-      {{ end }}
-    </tbody>
-  </table>
-  {{ else }}
-  <p>No runs yet.</p>
-  {{ end }}
-</section>
+{{ if .Runs }}
+<table class="runs-table">
+  <thead>
+    <tr>
+      <th>Commit</th>
+      <th>Workflow · Job</th>
+      <th>Branch</th>
+      <th>Event</th>
+      <th>When</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {{ range .Runs }}
+    <tr>
+      <td><code class="sha">{{ shortSHA .CommitSHA }}</code></td>
+      <td class="workflow-job">{{ .WorkflowName }}{{ if and .WorkflowName .JobName }} · {{ end }}{{ .JobName }}</td>
+      <td><code>{{ .Branch }}</code></td>
+      <td>{{ .EventName }}</td>
+      <td class="muted">{{ fmtTime .CreatedAt }}</td>
+      <td><a href="/projects/{{ $.Project.Slug }}/runs/{{ .ID }}">View</a></td>
+    </tr>
+    {{ end }}
+  </tbody>
+</table>
+{{ else }}
+<p class="muted">No runs yet.</p>
+{{ end }}
 {{ end }}
