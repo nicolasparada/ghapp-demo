@@ -58,6 +58,35 @@
     {{ end }}
   </section>
 
+  <section aria-labelledby="setup-heading" class="card p-4 sm:p-5">
+    <h2 id="setup-heading" class="eyebrow">Setup</h2>
+    <p class="mt-2 text-sm text-pretty muted">
+      Add the action to each workflow job you want to monitor. Place it before
+      your other steps so egress capture starts from the beginning of the job.
+    </p>
+
+    <pre
+      class="mt-4 overflow-x-auto rounded-lg bg-slate-950 p-4 text-xs leading-relaxed text-slate-100 dark:bg-slate-800"
+    ><code>jobs:
+  your-job:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required — lets the action mint an OIDC token
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: nicolasparada/ghapp-demo@main
+
+      # ... your other steps ...</code></pre>
+
+    <p class="mt-3 text-xs text-pretty muted">
+      The <code class="chip">id-token: write</code> permission is required so
+      the action can authenticate with the control-plane in the post-step.
+      The action is fail-open and Linux-only — it is a no-op on non-Linux
+      runners.
+    </p>
+  </section>
+
   <section aria-labelledby="runs-heading" class="flex flex-col gap-3">
     <h2 id="runs-heading" class="flex items-center gap-2 text-sm font-semibold">
       Runs
@@ -137,8 +166,10 @@
     </div>
     {{ else }}
     <p class="card p-8 text-center text-sm text-pretty muted sm:p-10">
-      No runs yet. Runs appear here once the action uploads egress from a
-      workflow job.
+      No runs yet. Follow the
+      <a class="link" href="#setup-heading">setup instructions</a> above to
+      add the action to a workflow job — runs will appear here once the first
+      upload completes.
     </p>
     {{ end }}
   </section>
