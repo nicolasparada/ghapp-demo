@@ -349,6 +349,14 @@ resource "google_cloud_run_v2_service" "control_plane" {
   template {
     service_account = google_service_account.control_plane.email
 
+    annotations = {
+      # Bumping var.app_secrets_version writes new Secret Manager versions for
+      # sensitive vars. Including it here ensures Terraform also creates a new
+      # Cloud Run revision on the same apply, so the revision starts up and
+      # reads the latest secret values.
+      "app-secrets-version" = tostring(var.app_secrets_version)
+    }
+
     scaling {
       min_instance_count = local.min_instance_count
       max_instance_count = local.max_instance_count
