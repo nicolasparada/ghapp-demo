@@ -18,7 +18,7 @@ locals {
   github_app_private_key_secret_id = "ghapp-control-plane-github-app-private-key"
   token_encryption_key_secret_id   = "ghapp-control-plane-token-encryption-key"
   db_credentials_version           = 1
-  token_encryption_key_version     = 1
+  token_encryption_key_version     = var.app_secrets_version
 
   iam_db_login_users = toset([
     "parada.nicolas@outlook.com",
