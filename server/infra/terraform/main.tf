@@ -12,13 +12,13 @@ locals {
   sql_database_name = "ghapp_demo"
   sql_database_user = "ghapp_demo"
 
-  db_secret_id                        = "ghapp-control-plane-db-password"
-  database_url_secret_id              = "ghapp-control-plane-database-url"
-  github_client_secret_secret_id    = "ghapp-control-plane-github-client-secret"
-  github_app_private_key_secret_id  = "ghapp-control-plane-github-app-private-key"
-  token_encryption_key_secret_id    = "ghapp-control-plane-token-encryption-key"
-  db_credentials_version            = 1
-  token_encryption_key_version      = 1
+  db_secret_id                     = "ghapp-control-plane-db-password"
+  database_url_secret_id           = "ghapp-control-plane-database-url"
+  github_client_secret_secret_id   = "ghapp-control-plane-github-client-secret"
+  github_app_private_key_secret_id = "ghapp-control-plane-github-app-private-key"
+  token_encryption_key_secret_id   = "ghapp-control-plane-token-encryption-key"
+  db_credentials_version           = 1
+  token_encryption_key_version     = 1
 
   iam_db_login_users = toset([
     "parada.nicolas@outlook.com",
@@ -281,7 +281,8 @@ resource "google_secret_manager_secret" "token_encryption_key" {
 resource "google_secret_manager_secret_version" "token_encryption_key" {
   secret = google_secret_manager_secret.token_encryption_key.id
 
-  secret_data_wo         = ephemeral.random_password.token_encryption_key.result
+  # Application expects TOKEN_ENCRYPTION_KEY to be base64 that decodes to 32 bytes.
+  secret_data_wo         = base64encode(ephemeral.random_password.token_encryption_key.result)
   secret_data_wo_version = local.token_encryption_key_version
 }
 
