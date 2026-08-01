@@ -39,7 +39,6 @@ jobs:
       TF_VAR_github_app_id: ${{ vars.CONTROL_PLANE_GITHUB_APP_ID }}
       TF_VAR_github_app_slug: ${{ vars.CONTROL_PLANE_GITHUB_APP_SLUG || 'ghapp-demo-app' }}
       TF_VAR_github_app_private_key: ${{ secrets.CONTROL_PLANE_GITHUB_APP_PRIVATE_KEY }}
-      TF_VAR_github_app_webhook_secret: ${{ secrets.CONTROL_PLANE_GITHUB_APP_WEBHOOK_SECRET }}
       TF_VAR_app_secrets_version: ${{ vars.CONTROL_PLANE_APP_SECRETS_VERSION || '1' }}
 
     steps:

@@ -53,12 +53,7 @@ variable "github_app_private_key" {
   default     = ""
 }
 
-variable "github_app_webhook_secret" {
-  description = "GitHub App webhook secret (optional during bootstrap; stored in Secret Manager when provided)"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
+
 
 variable "app_secrets_version" {
   description = "Bump to rotate application secret versions in Secret Manager"

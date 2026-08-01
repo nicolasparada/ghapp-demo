@@ -9,7 +9,7 @@ github_client_secret      = ""
 github_app_id             = ""
 github_app_slug           = "ghapp-demo-app"
 github_app_private_key    = ""
-github_app_webhook_secret = ""
+
 
 # Bump to force writing a new Secret Manager version for app secrets
 app_secrets_version       = 1

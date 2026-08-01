@@ -8,19 +8,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/google/go-github/v62/github"
-	"golang.org/x/oauth2"
-	ghoauth "golang.org/x/oauth2/github"
 
 	"github.com/nicolasparada/ghapp-demo/server/internal/auth"
 	"github.com/nicolasparada/ghapp-demo/server/internal/githubapp"
@@ -40,20 +37,26 @@ type Config struct {
 }
 
 type Server struct {
-	cfg              Config
-	store            *postgres.Store
-	renderer         *web.Renderer
-	oauthConfig      *oauth2.Config
-	secureCookies    bool
-	githubAppService *githubapp.Service
-	oidcVerifier     *oidc.Verifier
-	runsTokenManager *runsauth.TokenManager
+	cfg                  Config
+	store                *postgres.Store
+	renderer             *web.Renderer
+	secureCookies        bool
+	githubAppClient      *githubapp.Client
+	userAccessSyncMu     sync.Map
+	oidcVerifier         *oidc.Verifier
+	runsTokenManager     *runsauth.TokenManager
+	accessCacheTTL       time.Duration
+	accessMaxStaleness   time.Duration
+	ingestOwnerLimiter   *fixedWindowLimiter
+	publicRouteIPLimiter *fixedWindowLimiter
+	ownerRunQuotaPerDay  int64
 }
 
 type pageData struct {
 	Title       string
 	CurrentUser *types.User
 	Error       string
+	Warning     string
 }
 
 type dashboardData struct {
@@ -64,23 +67,33 @@ type dashboardData struct {
 type connectData struct {
 	pageData
 	Project              types.Project
-	RepoLinks            []types.RepoLink
+	Repos                []types.Repo
 	GitHubAppInstallURL  string
 	GitHubAppSettingsURL string
+	UsingStaleAccess     bool
 }
 
 type projectData struct {
 	pageData
 	Project types.Project
-	Repos   []string
+	Repos   []types.Repo
 	Runs    []types.Run
+}
+
+type repoRunsData struct {
+	pageData
+	RepoOwner string
+	RepoName  string
+	Runs      []types.Run
 }
 
 type runDetailData struct {
 	pageData
-	Project types.Project
-	Run     types.Run
-	Summary runSummaryView
+	Run             types.Run
+	Summary         runSummaryView
+	RepoOwner       string
+	RepoName        string
+	ShowMemberViews bool
 }
 
 type runSummaryView struct {
@@ -152,9 +165,14 @@ type lineageEgressPayload struct {
 }
 
 type runTokenRequest struct {
-	PayloadSHA256 string `json:"payload_sha256"`
-	JobName       string `json:"job_name"`
-	JobKey        string `json:"job_key"`
+	PayloadSHA256    string `json:"payload_sha256"`
+	JobName          string `json:"job_name"`
+	JobKey           string `json:"job_key"`
+	ExecutionID      string `json:"execution_id"`
+	RunnerName       string `json:"runner_name"`
+	RunnerOS         string `json:"runner_os"`
+	CaptureStartedAt string `json:"capture_started_at"`
+	CaptureEndedAt   string `json:"capture_ended_at"`
 }
 
 type userContextKey struct{}
@@ -166,6 +184,57 @@ var (
 	sha256HexPattern      = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
+const (
+	ownerIngestRatePerMinute       = 120
+	publicRouteRatePerMinute       = 240
+	ownerRunQuotaPerDay      int64 = 5000
+)
+
+type fixedWindowLimiter struct {
+	mu   sync.Mutex
+	hits map[string]fixedWindowCounter
+}
+
+type fixedWindowCounter struct {
+	windowStart time.Time
+	count       int
+}
+
+func newFixedWindowLimiter() *fixedWindowLimiter {
+	return &fixedWindowLimiter{hits: make(map[string]fixedWindowCounter)}
+}
+
+func (l *fixedWindowLimiter) Allow(key string, limit int, window time.Duration, now time.Time) bool {
+	if l == nil {
+		return true
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	if limit <= 0 {
+		return true
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	hit, ok := l.hits[key]
+	if !ok || now.Sub(hit.windowStart) >= window {
+		l.hits[key] = fixedWindowCounter{windowStart: now, count: 1}
+		return true
+	}
+	if hit.count >= limit {
+		return false
+	}
+	hit.count++
+	l.hits[key] = hit
+	return true
+}
+
 func UserFromContext(ctx context.Context) *types.User {
 	user, _ := ctx.Value(currentUserContextKey).(*types.User)
 	return user
@@ -175,27 +244,23 @@ func New(
 	cfg Config,
 	store *postgres.Store,
 	renderer *web.Renderer,
-	githubAppService *githubapp.Service,
+	githubAppClient *githubapp.Client,
 	oidcVerifier *oidc.Verifier,
 	runsTokenManager *runsauth.TokenManager,
 ) *Server {
-	oauthCfg := &oauth2.Config{
-		ClientID:     cfg.GitHubClientID,
-		ClientSecret: cfg.GitHubClientSecret,
-		Endpoint:     ghoauth.Endpoint,
-		RedirectURL:  strings.TrimRight(cfg.BaseURL, "/") + "/auth/github/callback",
-		Scopes:       []string{"read:user", "user:email"},
-	}
-
 	return &Server{
-		cfg:              cfg,
-		store:            store,
-		renderer:         renderer,
-		oauthConfig:      oauthCfg,
-		secureCookies:    strings.HasPrefix(strings.ToLower(cfg.BaseURL), "https://"),
-		githubAppService: githubAppService,
-		oidcVerifier:     oidcVerifier,
-		runsTokenManager: runsTokenManager,
+		cfg:                  cfg,
+		store:                store,
+		renderer:             renderer,
+		secureCookies:        strings.HasPrefix(strings.ToLower(cfg.BaseURL), "https://"),
+		githubAppClient:      githubAppClient,
+		oidcVerifier:         oidcVerifier,
+		runsTokenManager:     runsTokenManager,
+		accessCacheTTL:       5 * time.Minute,
+		accessMaxStaleness:   24 * time.Hour,
+		ingestOwnerLimiter:   newFixedWindowLimiter(),
+		publicRouteIPLimiter: newFixedWindowLimiter(),
+		ownerRunQuotaPerDay:  ownerRunQuotaPerDay,
 	}
 }
 
@@ -217,16 +282,12 @@ func (a *Server) Routes() http.Handler {
 	mux.Handle("GET /dashboard", a.requireUser(http.HandlerFunc(a.handleDashboard)))
 	mux.Handle("POST /projects", a.requireUser(http.HandlerFunc(a.handleCreateProject)))
 	mux.Handle("GET /projects/{slug}", a.requireUser(http.HandlerFunc(a.handleProject)))
-	mux.Handle("GET /projects/{slug}/runs/{runID}", a.requireUser(http.HandlerFunc(a.handleRunDetail)))
-	mux.Handle("GET /projects/{slug}/connect", a.requireUser(http.HandlerFunc(a.handleConnectReposPage)))
-
-	if a.githubAppService != nil {
-		mux.HandleFunc("POST /webhooks/github", a.githubAppService.HandleWebhook)
-	} else {
-		mux.HandleFunc("POST /webhooks/github", func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "github app service not configured", http.StatusServiceUnavailable)
-		})
-	}
+	mux.Handle("GET /projects/{slug}/repos", a.requireUser(http.HandlerFunc(a.handleConnectReposPage)))
+	mux.Handle("POST /projects/{slug}/repos/bind", a.requireUser(http.HandlerFunc(a.handleBindRepo)))
+	mux.Handle("POST /projects/{slug}/repos/unbind", a.requireUser(http.HandlerFunc(a.handleUnbindRepo)))
+	mux.Handle("GET /projects/{slug}/members", a.requireUser(http.HandlerFunc(a.handleProjectMembersPage)))
+	mux.HandleFunc("GET /runs/{publicID}", a.handleRunDetail)
+	mux.HandleFunc("GET /r/{owner}/{repo}", a.handleRepoRuns)
 
 	mux.HandleFunc("POST /runs/token", a.handleRunsToken)
 	mux.HandleFunc("POST /runs", a.handleRunsIngest)
@@ -298,8 +359,8 @@ func (a *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Server) handleGitHubLogin(w http.ResponseWriter, r *http.Request) {
-	if a.cfg.GitHubClientID == "" || a.cfg.GitHubClientSecret == "" {
-		a.renderError(w, http.StatusServiceUnavailable, "GitHub OAuth is not configured")
+	if a.githubAppClient == nil {
+		a.renderError(w, http.StatusServiceUnavailable, "GitHub App login is not configured")
 		return
 	}
 
@@ -310,13 +371,13 @@ func (a *Server) handleGitHubLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	auth.SetOAuthStateCookie(w, state, a.secureCookies)
 
-	url := a.oauthConfig.AuthCodeURL(state)
+	url := a.githubAppClient.AuthCodeURL(state)
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 }
 
 func (a *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
-	if a.cfg.GitHubClientID == "" || a.cfg.GitHubClientSecret == "" {
-		a.renderError(w, http.StatusServiceUnavailable, "GitHub OAuth is not configured")
+	if a.githubAppClient == nil {
+		a.renderError(w, http.StatusServiceUnavailable, "GitHub App login is not configured")
 		return
 	}
 
@@ -335,15 +396,13 @@ func (a *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	auth.ClearOAuthStateCookie(w, a.secureCookies)
 
-	tok, err := a.oauthConfig.Exchange(r.Context(), code)
+	userToken, err := a.githubAppClient.ExchangeUserCode(r.Context(), code)
 	if err != nil {
 		a.renderError(w, http.StatusBadGateway, "failed to exchange oauth code")
 		return
 	}
 
-	oauthClient := a.oauthConfig.Client(r.Context(), tok)
-	gh := github.NewClient(oauthClient)
-	ghUser, _, err := gh.Users.Get(r.Context(), "")
+	ghUser, err := a.githubAppClient.GitHubUser(r.Context(), userToken.AccessToken)
 	if err != nil {
 		a.renderError(w, http.StatusBadGateway, "failed to fetch github profile")
 		return
@@ -352,6 +411,24 @@ func (a *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	user, err := a.store.UpsertUserFromGitHub(r.Context(), ghUser.GetID(), ghUser.GetLogin(), ghUser.GetAvatarURL())
 	if err != nil {
 		a.renderError(w, http.StatusInternalServerError, "failed to persist user")
+		return
+	}
+
+	accessEnc, err := a.githubAppClient.EncryptToken(userToken.AccessToken)
+	if err != nil {
+		a.renderError(w, http.StatusInternalServerError, "failed to encrypt access token")
+		return
+	}
+	refreshEnc := []byte(nil)
+	if strings.TrimSpace(userToken.RefreshToken) != "" {
+		refreshEnc, err = a.githubAppClient.EncryptToken(userToken.RefreshToken)
+		if err != nil {
+			a.renderError(w, http.StatusInternalServerError, "failed to encrypt refresh token")
+			return
+		}
+	}
+	if err := a.store.UpsertUserGitHubTokens(r.Context(), user.ID, accessEnc, userToken.AccessTokenExpiresAt, refreshEnc, userToken.RefreshTokenExpiresAt); err != nil {
+		a.renderError(w, http.StatusInternalServerError, "failed to persist github tokens")
 		return
 	}
 
@@ -447,13 +524,13 @@ func (a *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repos, err := a.store.ListProjectRepos(r.Context())
+	repos, err := a.store.ListProjectRepos(r.Context(), project.ID)
 	if err != nil {
 		a.renderError(w, http.StatusInternalServerError, "failed to list project repositories")
 		return
 	}
 
-	runs, err := a.store.ListRunsForProject(r.Context(), 100)
+	runs, err := a.store.ListRunsForProject(r.Context(), project.ID, 100)
 	if err != nil {
 		a.renderError(w, http.StatusInternalServerError, "failed to list runs")
 		return
@@ -471,31 +548,27 @@ func (a *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
-	user, err := a.userFromRequest(r)
-	if err != nil {
-		a.renderError(w, http.StatusInternalServerError, err.Error())
+	if !a.allowPublicRouteRequest(w, r) {
 		return
 	}
 
-	project, err := a.projectFromPath(r, user.ID)
-	if err != nil {
-		if errors.Is(err, postgres.ErrNotFound) {
-			a.renderError(w, http.StatusNotFound, "project not found")
-			return
-		}
-		a.renderError(w, http.StatusInternalServerError, "failed to load project")
-		return
+	var userID *int64
+	currentUser := UserFromContext(r.Context())
+	if currentUser != nil {
+		userID = &currentUser.ID
 	}
+	a.applyPublicCacheHeaders(w, currentUser == nil)
 
-	runID, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("runID")), 10, 64)
-	if err != nil || runID <= 0 {
+	publicID := strings.TrimSpace(r.PathValue("publicID"))
+	if publicID == "" {
 		a.renderError(w, http.StatusBadRequest, "invalid run id")
 		return
 	}
 
-	run, err := a.store.GetRunForProject(r.Context(), runID)
+	run, err := a.store.GetRunByPublicID(r.Context(), publicID, userID)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
+			// 404 on authz denial to avoid private repo enumeration.
 			a.renderError(w, http.StatusNotFound, "run not found")
 			return
 		}
@@ -503,17 +576,101 @@ func (a *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary := buildRunSummaryView(run)
+	owner, repo := splitRepoFullName(run.RepoFullName)
+	summary := buildRunSummaryView(run, run.ViewerIsMember)
 
 	if err := a.renderer.Render(w, "run.html", runDetailData{
-		pageData: pageData{Title: "Run details", CurrentUser: user},
-		Project:  project,
-		Run:      run,
-		Summary:  summary,
+		pageData:        pageData{Title: "Run details", CurrentUser: currentUser},
+		Run:             run,
+		Summary:         summary,
+		RepoOwner:       owner,
+		RepoName:        repo,
+		ShowMemberViews: run.ViewerIsMember,
 	}); err != nil {
 		a.renderError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+}
+
+func (a *Server) handleRepoRuns(w http.ResponseWriter, r *http.Request) {
+	if !a.allowPublicRouteRequest(w, r) {
+		return
+	}
+
+	owner := strings.TrimSpace(r.PathValue("owner"))
+	repo := strings.TrimSpace(r.PathValue("repo"))
+	if owner == "" || repo == "" {
+		a.renderError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	var userID *int64
+	currentUser := UserFromContext(r.Context())
+	if currentUser != nil {
+		userID = &currentUser.ID
+	}
+	a.applyPublicCacheHeaders(w, currentUser == nil)
+
+	runs, err := a.store.ListRunsForRepo(r.Context(), owner, repo, userID, 100)
+	if err != nil {
+		a.renderError(w, http.StatusInternalServerError, "failed to list runs")
+		return
+	}
+	if len(runs) == 0 {
+		// 404 on authz denial (and empty/non-existent) to avoid private repo enumeration.
+		a.renderError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	if err := a.renderer.Render(w, "repo_runs.html", repoRunsData{
+		pageData:  pageData{Title: owner + "/" + repo, CurrentUser: currentUser},
+		RepoOwner: owner,
+		RepoName:  repo,
+		Runs:      runs,
+	}); err != nil {
+		a.renderError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
+func (a *Server) allowPublicRouteRequest(w http.ResponseWriter, r *http.Request) bool {
+	ip := requestIP(r)
+	if !a.publicRouteIPLimiter.Allow(ip, publicRouteRatePerMinute, time.Minute, time.Now()) {
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return false
+	}
+	return true
+}
+
+func (a *Server) applyPublicCacheHeaders(w http.ResponseWriter, anonymous bool) {
+	w.Header().Add("Vary", "Cookie")
+	if anonymous {
+		w.Header().Set("Cache-Control", "public, max-age=30")
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+}
+
+func requestIP(r *http.Request) string {
+	xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+	if xff != "" {
+		parts := strings.Split(xff, ",")
+		if len(parts) > 0 {
+			first := strings.TrimSpace(parts[0])
+			if first != "" {
+				return first
+			}
+		}
+	}
+	hostPort := strings.TrimSpace(r.RemoteAddr)
+	if hostPort == "" {
+		return "unknown"
+	}
+	host, _, err := net.SplitHostPort(hostPort)
+	if err == nil && strings.TrimSpace(host) != "" {
+		return host
+	}
+	return hostPort
 }
 
 func (a *Server) handleConnectReposPage(w http.ResponseWriter, r *http.Request) {
@@ -533,17 +690,147 @@ func (a *Server) handleConnectReposPage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	repoLinks, err := a.store.ListAvailableRepoLinks(r.Context())
+	usingStaleAccess, err := a.ensureUserRepoAccess(r.Context(), user.ID)
+	if err != nil {
+		a.renderError(w, http.StatusForbidden, "github repository access is unavailable")
+		return
+	}
+
+	repos, err := a.store.ListReposForProjectBinding(r.Context(), project.ID, user.ID)
 	if err != nil {
 		a.renderError(w, http.StatusInternalServerError, "failed to list repositories")
 		return
 	}
 	if err := a.renderer.Render(w, "connect.html", connectData{
-		pageData:             pageData{Title: "Connect repositories", CurrentUser: user},
+		pageData:             pageData{Title: "Project repositories", CurrentUser: user},
 		Project:              project,
-		RepoLinks:            repoLinks,
+		Repos:                repos,
 		GitHubAppInstallURL:  a.cfg.GitHubAppInstallURL,
 		GitHubAppSettingsURL: configuredGitHubAppSettingsURL(a.cfg.GitHubAppSettingsURL, a.cfg.GitHubAppInstallURL),
+		UsingStaleAccess:     usingStaleAccess,
+	}); err != nil {
+		a.renderError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
+func canManageProject(role string) bool {
+	role = strings.ToLower(strings.TrimSpace(role))
+	return role == "owner" || role == "admin"
+}
+
+func (a *Server) handleBindRepo(w http.ResponseWriter, r *http.Request) {
+	user, err := a.userFromRequest(r)
+	if err != nil {
+		a.renderError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	project, err := a.projectFromPath(r, user.ID)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			a.renderError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		a.renderError(w, http.StatusInternalServerError, "failed to load project")
+		return
+	}
+	if !canManageProject(project.Role) {
+		a.renderError(w, http.StatusForbidden, "insufficient role for repo binding")
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		a.renderError(w, http.StatusBadRequest, "invalid form")
+		return
+	}
+	repoID, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("repo_id")), 10, 64)
+	if err != nil || repoID <= 0 {
+		a.renderError(w, http.StatusBadRequest, "invalid repo id")
+		return
+	}
+
+	_, err = a.ensureUserRepoAccess(r.Context(), user.ID)
+	if err != nil {
+		a.renderError(w, http.StatusForbidden, "github repository access is unavailable")
+		return
+	}
+
+	canBind, err := a.store.UserCanAccessRepoForBinding(r.Context(), user.ID, repoID)
+	if err != nil {
+		a.renderError(w, http.StatusInternalServerError, "failed to verify repo access")
+		return
+	}
+	if !canBind {
+		a.renderError(w, http.StatusForbidden, "you do not have github access to this repository")
+		return
+	}
+
+	if err := a.store.BindRepoToProject(r.Context(), project.ID, repoID, user.ID); err != nil {
+		a.renderError(w, http.StatusInternalServerError, "failed to bind repository")
+		return
+	}
+	http.Redirect(w, r, "/projects/"+project.Slug+"/repos", http.StatusSeeOther)
+}
+
+func (a *Server) handleUnbindRepo(w http.ResponseWriter, r *http.Request) {
+	user, err := a.userFromRequest(r)
+	if err != nil {
+		a.renderError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	project, err := a.projectFromPath(r, user.ID)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			a.renderError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		a.renderError(w, http.StatusInternalServerError, "failed to load project")
+		return
+	}
+	if !canManageProject(project.Role) {
+		a.renderError(w, http.StatusForbidden, "insufficient role for repo binding")
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		a.renderError(w, http.StatusBadRequest, "invalid form")
+		return
+	}
+	repoID, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("repo_id")), 10, 64)
+	if err != nil || repoID <= 0 {
+		a.renderError(w, http.StatusBadRequest, "invalid repo id")
+		return
+	}
+	if err := a.store.UnbindRepoFromProject(r.Context(), project.ID, repoID); err != nil {
+		a.renderError(w, http.StatusInternalServerError, "failed to unbind repository")
+		return
+	}
+	http.Redirect(w, r, "/projects/"+project.Slug+"/repos", http.StatusSeeOther)
+}
+
+func (a *Server) handleProjectMembersPage(w http.ResponseWriter, r *http.Request) {
+	user, err := a.userFromRequest(r)
+	if err != nil {
+		a.renderError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	project, err := a.projectFromPath(r, user.ID)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			a.renderError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		a.renderError(w, http.StatusInternalServerError, "failed to load project")
+		return
+	}
+
+	if err := a.renderer.Render(w, "members.html", struct {
+		pageData
+		Project types.Project
+	}{
+		pageData: pageData{Title: "Project members", CurrentUser: user},
+		Project:  project,
 	}); err != nil {
 		a.renderError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -571,14 +858,8 @@ func (a *Server) handleRunsToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid oidc token", http.StatusUnauthorized)
 		return
 	}
-
-	repoLinked, err := a.store.IsRepoLinked(r.Context(), principal.Repository)
-	if err != nil {
-		http.Error(w, "failed to verify repo link", http.StatusInternalServerError)
-		return
-	}
-	if !repoLinked {
-		http.Error(w, "repository is not linked to any installation", http.StatusForbidden)
+	if !a.ingestOwnerLimiter.Allow(strconv.FormatInt(principal.RepositoryOwnerID, 10), ownerIngestRatePerMinute, time.Minute, time.Now()) {
+		http.Error(w, "repository owner rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 
@@ -600,6 +881,12 @@ func (a *Server) handleRunsToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	executionID := strings.TrimSpace(req.ExecutionID)
+	if executionID == "" {
+		http.Error(w, "execution_id is required", http.StatusBadRequest)
+		return
+	}
+
 	jobKey := strings.TrimSpace(req.JobKey)
 	if jobKey == "" {
 		jobKey = strings.TrimSpace(principal.JobWorkflowRef)
@@ -616,7 +903,16 @@ func (a *Server) handleRunsToken(w http.ResponseWriter, r *http.Request) {
 		jobName = jobKey
 	}
 
-	uploadToken, expiresAt, err := a.runsTokenManager.IssueUploadToken(principal, payloadSHA, jobName, jobKey)
+	uploadToken, expiresAt, err := a.runsTokenManager.IssueUploadToken(principal, runsauth.UploadRequest{
+		PayloadSHA256:    payloadSHA,
+		ExecutionID:      executionID,
+		JobName:          jobName,
+		JobKey:           jobKey,
+		RunnerName:       strings.TrimSpace(req.RunnerName),
+		RunnerOS:         strings.TrimSpace(req.RunnerOS),
+		CaptureStartedAt: strings.TrimSpace(req.CaptureStartedAt),
+		CaptureEndedAt:   strings.TrimSpace(req.CaptureEndedAt),
+	})
 	if err != nil {
 		http.Error(w, "failed to issue upload token", http.StatusInternalServerError)
 		return
@@ -647,14 +943,8 @@ func (a *Server) handleRunsIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid upload token", http.StatusUnauthorized)
 		return
 	}
-
-	repoLinked, err := a.store.IsRepoLinked(r.Context(), claims.Repository)
-	if err != nil {
-		http.Error(w, "failed to verify repo link", http.StatusInternalServerError)
-		return
-	}
-	if !repoLinked {
-		http.Error(w, "repository is not linked to any installation", http.StatusForbidden)
+	if !a.ingestOwnerLimiter.Allow(strconv.FormatInt(claims.RepositoryOwnerID, 10), ownerIngestRatePerMinute, time.Minute, time.Now()) {
+		http.Error(w, "repository owner rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 
@@ -705,19 +995,69 @@ func (a *Server) handleRunsIngest(w http.ResponseWriter, r *http.Request) {
 		branch = strings.TrimSpace(claims.Ref)
 	}
 
+	captureStartedAt, err := parseOptionalRFC3339(claims.CaptureStartedAt)
+	if err != nil {
+		http.Error(w, "invalid capture_started_at", http.StatusBadRequest)
+		return
+	}
+	captureEndedAt, err := parseOptionalRFC3339(claims.CaptureEndedAt)
+	if err != nil {
+		http.Error(w, "invalid capture_ended_at", http.StatusBadRequest)
+		return
+	}
+
+	repo := types.Repo{
+		RepoID:      claims.RepositoryID,
+		FullName:    claims.Repository,
+		Owner:       repoOwnerFromFullName(claims.Repository),
+		OwnerID:     claims.RepositoryOwnerID,
+		Visibility:  claims.RepositoryVisibility,
+		UpdatedFrom: "oidc",
+	}
+	if err := a.store.UpsertRepo(r.Context(), repo); err != nil {
+		http.Error(w, "failed to persist repo", http.StatusInternalServerError)
+		return
+	}
+
+	if a.ownerRunQuotaPerDay > 0 {
+		count, err := a.store.CountRunsByOwnerSince(r.Context(), claims.RepositoryOwnerID, time.Now().Add(-24*time.Hour))
+		if err != nil {
+			http.Error(w, "failed to evaluate owner quota", http.StatusInternalServerError)
+			return
+		}
+		if count >= a.ownerRunQuotaPerDay {
+			http.Error(w, "repository owner daily run quota exceeded", http.StatusTooManyRequests)
+			return
+		}
+	}
+
 	run := types.Run{
-		RepoFullName:   claims.Repository,
-		CommitSHA:      claims.CommitSHA,
-		WorkflowName:   claims.WorkflowName,
-		JobWorkflowRef: claims.JobWorkflowRef,
-		JobName:        jobName,
-		GitHubRunID:    claims.RunID,
-		GitHubJobID:    stableInt64(jobKey),
-		Branch:         branch,
-		EventName:      claims.EventName,
-		Actor:          claims.Actor,
-		PRNumber:       parsePRNumber(claims.Ref),
-		EgressJSON:     json.RawMessage(body),
+		RepoID:            claims.RepositoryID,
+		RepoFullName:      claims.Repository,
+		CommitSHA:         claims.CommitSHA,
+		WorkflowName:      claims.WorkflowName,
+		WorkflowRef:       claims.WorkflowRef,
+		WorkflowSHA:       claims.WorkflowSHA,
+		JobWorkflowRef:    claims.JobWorkflowRef,
+		JobWorkflowSHA:    claims.JobWorkflowSHA,
+		JobName:           jobName,
+		GitHubRunID:       claims.RunID,
+		GitHubJobID:       claims.GitHubJobID,
+		RunAttempt:        int(claims.RunAttempt),
+		Branch:            branch,
+		EventName:         claims.EventName,
+		Actor:             claims.Actor,
+		ActorID:           nullableInt64Pointer(claims.ActorID),
+		RunnerEnvironment: claims.RunnerEnvironment,
+		ExecutionID:       claims.ExecutionID,
+		JobKey:            jobKey,
+		RunnerName:        claims.RunnerName,
+		RunnerOS:          claims.RunnerOS,
+		CaptureStartedAt:  captureStartedAt,
+		CaptureEndedAt:    captureEndedAt,
+		PayloadSHA256:     expectedSHA,
+		PRNumber:          parsePRNumber(claims.Ref),
+		EgressJSON:        json.RawMessage(body),
 	}
 
 	if err := a.store.UpsertRun(r.Context(), run); err != nil {
@@ -754,7 +1094,7 @@ func validateRunSummaryPayload(raw []byte) error {
 	return nil
 }
 
-func buildRunSummaryView(run types.Run) runSummaryView {
+func buildRunSummaryView(run types.Run, includeSensitive bool) runSummaryView {
 	var payload runSummaryPayload
 	if err := json.Unmarshal(run.EgressJSON, &payload); err != nil {
 		return runSummaryView{
@@ -764,7 +1104,7 @@ func buildRunSummaryView(run types.Run) runSummaryView {
 
 	return runSummaryView{
 		LineageRootLabel: formatRunLineageRootLabel(run),
-		LineageRoots:     convertLineageTreeToView(payload.LineageTree),
+		LineageRoots:     convertLineageTreeToView(payload.LineageTree, includeSensitive),
 		ErrorMessages:    payload.Errors,
 	}
 }
@@ -785,7 +1125,7 @@ func formatRunLineageRootLabel(run types.Run) string {
 	}
 }
 
-func convertLineageTreeToView(nodes []lineageTreePayload) []lineageTreeNodeView {
+func convertLineageTreeToView(nodes []lineageTreePayload, includeSensitive bool) []lineageTreeNodeView {
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -801,22 +1141,22 @@ func convertLineageTreeToView(nodes []lineageTreePayload) []lineageTreeNodeView 
 		}
 
 		out = append(out, lineageTreeNodeView{
-			Label:        processNodeDisplayLabel(node),
+			Label:        processNodeDisplayLabel(node, includeSensitive),
 			DirectEgress: node.DirectEgress,
 			TotalEgress:  node.TotalEgress,
 			Egress:       egress,
-			Children:     convertLineageTreeToView(node.Children),
+			Children:     convertLineageTreeToView(node.Children, includeSensitive),
 		})
 	}
 
 	return out
 }
 
-func processNodeDisplayLabel(node lineageTreePayload) string {
+func processNodeDisplayLabel(node lineageTreePayload, includeSensitive bool) string {
 	name := strings.TrimSpace(node.Name)
 	cmdline := strings.TrimSpace(node.Cmdline)
 
-	if cmdline != "" {
+	if includeSensitive && cmdline != "" {
 		parts := strings.Fields(cmdline)
 		if len(parts) > 1 {
 			first := strings.ToLower(filepath.Base(parts[0]))
@@ -872,6 +1212,137 @@ func isLocalhostHost(host string) bool {
 	return h == "localhost" || h == "127.0.0.1" || h == "127.0.0.53" || h == "::1"
 }
 
+func splitRepoFullName(fullName string) (string, string) {
+	parts := strings.SplitN(strings.TrimSpace(fullName), "/", 2)
+	if len(parts) != 2 {
+		return fullName, ""
+	}
+	return parts[0], parts[1]
+}
+
+func (a *Server) userSyncLock(userID int64) *sync.Mutex {
+	value, _ := a.userAccessSyncMu.LoadOrStore(userID, &sync.Mutex{})
+	lock, _ := value.(*sync.Mutex)
+	return lock
+}
+
+func (a *Server) ensureUserRepoAccess(ctx context.Context, userID int64) (bool, error) {
+	if a.githubAppClient == nil {
+		return false, errors.New("github app client unavailable")
+	}
+
+	now := time.Now().UTC()
+	syncState, err := a.store.GetUserAccessSync(ctx, userID)
+	if err != nil && !errors.Is(err, postgres.ErrNotFound) {
+		return false, err
+	}
+	if syncState.SyncedAt != nil && now.Sub(*syncState.SyncedAt) <= a.accessCacheTTL {
+		return false, nil
+	}
+
+	lock := a.userSyncLock(userID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	now = time.Now().UTC()
+	syncState, err = a.store.GetUserAccessSync(ctx, userID)
+	if err != nil && !errors.Is(err, postgres.ErrNotFound) {
+		return false, err
+	}
+	if syncState.SyncedAt != nil && now.Sub(*syncState.SyncedAt) <= a.accessCacheTTL {
+		return false, nil
+	}
+
+	if err := a.syncUserRepoAccess(ctx, userID); err != nil {
+		msg := err.Error()
+		_ = a.store.UpsertUserAccessSync(ctx, userID, syncState.SyncedAt, now, &msg, syncState.ETag)
+		if syncState.SyncedAt != nil && now.Sub(*syncState.SyncedAt) <= a.accessMaxStaleness {
+			return true, nil
+		}
+		return false, err
+	}
+
+	now = time.Now().UTC()
+	if err := a.store.UpsertUserAccessSync(ctx, userID, &now, now, nil, nil); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func (a *Server) syncUserRepoAccess(ctx context.Context, userID int64) error {
+	accessEnc, accessExp, refreshEnc, _, err := a.store.GetUserGitHubTokens(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	accessToken, err := a.githubAppClient.DecryptToken(accessEnc)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	if accessExp != nil && now.After(accessExp.Add(-1*time.Minute)) {
+		if len(refreshEnc) == 0 {
+			return errors.New("github user token expired and no refresh token is available")
+		}
+		refreshToken, err := a.githubAppClient.DecryptToken(refreshEnc)
+		if err != nil {
+			return err
+		}
+		newTokens, err := a.githubAppClient.RefreshUserToken(ctx, refreshToken)
+		if err != nil {
+			return err
+		}
+		accessToken = newTokens.AccessToken
+		newAccessEnc, err := a.githubAppClient.EncryptToken(newTokens.AccessToken)
+		if err != nil {
+			return err
+		}
+		newRefreshEnc := refreshEnc
+		if strings.TrimSpace(newTokens.RefreshToken) != "" {
+			newRefreshEnc, err = a.githubAppClient.EncryptToken(newTokens.RefreshToken)
+			if err != nil {
+				return err
+			}
+		}
+		if err := a.store.UpsertUserGitHubTokens(ctx, userID, newAccessEnc, newTokens.AccessTokenExpiresAt, newRefreshEnc, newTokens.RefreshTokenExpiresAt); err != nil {
+			return err
+		}
+	}
+
+	installations, _, err := a.githubAppClient.ListUserInstallations(ctx, accessToken)
+	if err != nil {
+		return err
+	}
+
+	rows := make([]postgres.UserRepoAccessRow, 0, 64)
+	for _, installation := range installations {
+		repos, err := a.githubAppClient.ListUserInstallationRepositories(ctx, accessToken, installation.ID)
+		if err != nil {
+			return err
+		}
+		for _, repo := range repos {
+			repoRecord := types.Repo{
+				RepoID:      repo.RepoID,
+				FullName:    repo.FullName,
+				Owner:       repo.Owner,
+				OwnerID:     repo.OwnerID,
+				Visibility:  repo.Visibility,
+				UpdatedFrom: "api",
+			}
+			if err := a.store.UpsertRepo(ctx, repoRecord); err != nil {
+				return err
+			}
+			rows = append(rows, postgres.UserRepoAccessRow{RepoID: repo.RepoID, InstallationID: installation.ID})
+		}
+	}
+
+	if err := a.store.ReplaceUserRepoAccess(ctx, userID, rows); err != nil {
+		return err
+	}
+	return nil
+}
+
 func configuredGitHubAppSettingsURL(settingsURL string, installURL string) string {
 	if value := strings.TrimSpace(settingsURL); value != "" {
 		return value
@@ -920,10 +1391,29 @@ func normalizeSHA256Hex(v string) (string, bool) {
 	return normalized, true
 }
 
-func stableInt64(s string) int64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(s))
-	return int64(h.Sum64() & 0x7fffffffffffffff)
+func parseOptionalRFC3339(v string) (*time.Time, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func nullableInt64Pointer(v int64) *int64 {
+	if v <= 0 {
+		return nil
+	}
+	value := v
+	return &value
+}
+
+func repoOwnerFromFullName(fullName string) string {
+	owner, _ := splitRepoFullName(fullName)
+	return owner
 }
 
 func parsePRNumber(ref string) *int64 {

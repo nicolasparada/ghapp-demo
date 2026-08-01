@@ -24,18 +24,18 @@ const (
 
 type Config struct {
 	Issuer     string
-	Audience   string
+	Audiences  []string
 	JWKSURL    string
 	CacheTTL   time.Duration
 	HTTPClient *http.Client
 }
 
 type Verifier struct {
-	issuer   string
-	audience string
-	jwksURL  string
-	cacheTTL time.Duration
-	client   *http.Client
+	issuer    string
+	audiences []string
+	jwksURL   string
+	cacheTTL  time.Duration
+	client    *http.Client
 
 	mu        sync.RWMutex
 	keys      map[string]*rsa.PublicKey
@@ -43,16 +43,25 @@ type Verifier struct {
 }
 
 type Principal struct {
-	Repository     string
-	CommitSHA      string
-	RunID          int64
-	WorkflowName   string
-	JobWorkflowRef string
-	EventName      string
-	Actor          string
-	Ref            string
-	HeadRef        string
-	Subject        string
+	Repository           string
+	RepositoryID         int64
+	RepositoryOwnerID    int64
+	RepositoryVisibility string
+	CommitSHA            string
+	RunID                int64
+	RunAttempt           int64
+	WorkflowName         string
+	WorkflowRef          string
+	WorkflowSHA          string
+	JobWorkflowRef       string
+	JobWorkflowSHA       string
+	EventName            string
+	Actor                string
+	ActorID              int64
+	Ref                  string
+	HeadRef              string
+	Subject              string
+	RunnerEnvironment    string
 }
 
 type jwksDocument struct {
@@ -87,13 +96,27 @@ func NewVerifier(cfg Config) *Verifier {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
 
+	audiences := make([]string, 0, len(cfg.Audiences))
+	seen := make(map[string]struct{}, len(cfg.Audiences))
+	for _, audience := range cfg.Audiences {
+		audience = strings.TrimSpace(audience)
+		if audience == "" {
+			continue
+		}
+		if _, ok := seen[audience]; ok {
+			continue
+		}
+		seen[audience] = struct{}{}
+		audiences = append(audiences, audience)
+	}
+
 	return &Verifier{
-		issuer:   issuer,
-		audience: strings.TrimSpace(cfg.Audience),
-		jwksURL:  jwksURL,
-		cacheTTL: cacheTTL,
-		client:   client,
-		keys:     map[string]*rsa.PublicKey{},
+		issuer:    issuer,
+		audiences: audiences,
+		jwksURL:   jwksURL,
+		cacheTTL:  cacheTTL,
+		client:    client,
+		keys:      map[string]*rsa.PublicKey{},
 	}
 }
 
@@ -106,9 +129,6 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (Principal, erro
 	parserOptions := []jwt.ParserOption{
 		jwt.WithIssuer(v.issuer),
 		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
-	}
-	if v.audience != "" {
-		parserOptions = append(parserOptions, jwt.WithAudience(v.audience))
 	}
 
 	token, err := jwt.Parse(rawToken, func(token *jwt.Token) (any, error) {
@@ -129,6 +149,9 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (Principal, erro
 	if !ok {
 		return Principal{}, errors.New("invalid token claims")
 	}
+	if !v.isAudienceAllowed(claims) {
+		return Principal{}, errors.New("invalid audience")
+	}
 
 	principal, err := principalFromClaims(claims)
 	if err != nil {
@@ -148,23 +171,114 @@ func principalFromClaims(claims jwt.MapClaims) (Principal, error) {
 		return Principal{}, errors.New("missing or invalid run_id claim")
 	}
 
+	repositoryID, ok := claimInt64(claims, "repository_id")
+	if !ok || repositoryID <= 0 {
+		return Principal{}, errors.New("missing or invalid repository_id claim")
+	}
+
+	repositoryOwnerID, ok := claimInt64(claims, "repository_owner_id")
+	if !ok || repositoryOwnerID <= 0 {
+		return Principal{}, errors.New("missing or invalid repository_owner_id claim")
+	}
+
+	repositoryVisibility := strings.ToLower(claimString(claims, "repository_visibility"))
+	switch repositoryVisibility {
+	case "public", "private", "internal":
+	default:
+		return Principal{}, errors.New("missing or invalid repository_visibility claim")
+	}
+
+	runAttempt, ok := claimInt64(claims, "run_attempt")
+	if !ok || runAttempt <= 0 {
+		return Principal{}, errors.New("missing or invalid run_attempt claim")
+	}
+
+	actorID, ok := claimInt64(claims, "actor_id")
+	if !ok || actorID <= 0 {
+		return Principal{}, errors.New("missing or invalid actor_id claim")
+	}
+
 	commitSHA := claimString(claims, "sha")
 	if commitSHA == "" {
 		return Principal{}, errors.New("missing sha claim")
 	}
 
 	return Principal{
-		Repository:     repository,
-		CommitSHA:      commitSHA,
-		RunID:          runID,
-		WorkflowName:   claimString(claims, "workflow"),
-		JobWorkflowRef: claimString(claims, "job_workflow_ref"),
-		EventName:      claimString(claims, "event_name"),
-		Actor:          claimString(claims, "actor"),
-		Ref:            claimString(claims, "ref"),
-		HeadRef:        claimString(claims, "head_ref"),
-		Subject:        claimString(claims, "sub"),
+		Repository:           repository,
+		RepositoryID:         repositoryID,
+		RepositoryOwnerID:    repositoryOwnerID,
+		RepositoryVisibility: repositoryVisibility,
+		CommitSHA:            commitSHA,
+		RunID:                runID,
+		RunAttempt:           runAttempt,
+		WorkflowName:         claimString(claims, "workflow"),
+		WorkflowRef:          claimString(claims, "workflow_ref"),
+		WorkflowSHA:          claimString(claims, "workflow_sha"),
+		JobWorkflowRef:       claimString(claims, "job_workflow_ref"),
+		JobWorkflowSHA:       claimString(claims, "job_workflow_sha"),
+		EventName:            claimString(claims, "event_name"),
+		Actor:                claimString(claims, "actor"),
+		ActorID:              actorID,
+		Ref:                  claimString(claims, "ref"),
+		HeadRef:              claimString(claims, "head_ref"),
+		Subject:              claimString(claims, "sub"),
+		RunnerEnvironment:    claimString(claims, "runner_environment"),
 	}, nil
+}
+
+func (v *Verifier) isAudienceAllowed(claims jwt.MapClaims) bool {
+	if len(v.audiences) == 0 {
+		return true
+	}
+
+	audiences := tokenAudiences(claims)
+	if len(audiences) == 0 {
+		return false
+	}
+
+	allowed := make(map[string]struct{}, len(v.audiences))
+	for _, audience := range v.audiences {
+		allowed[audience] = struct{}{}
+	}
+	for _, audience := range audiences {
+		if _, ok := allowed[audience]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func tokenAudiences(claims jwt.MapClaims) []string {
+	value, ok := claims["aud"]
+	if !ok || value == nil {
+		return nil
+	}
+	out := []string{}
+	push := func(raw string) {
+		audience := strings.TrimSpace(raw)
+		if audience == "" {
+			return
+		}
+		out = append(out, audience)
+	}
+
+	switch aud := value.(type) {
+	case string:
+		push(aud)
+	case []any:
+		for _, item := range aud {
+			s, ok := item.(string)
+			if ok {
+				push(s)
+			}
+		}
+	case []string:
+		for _, item := range aud {
+			push(item)
+		}
+	}
+
+	return out
 }
 
 func claimString(claims jwt.MapClaims, key string) string {

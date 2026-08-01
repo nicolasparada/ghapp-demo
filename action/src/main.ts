@@ -3,9 +3,12 @@ import { closeSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   STATE_AGENT_PID,
   STATE_CONTROL_PLANE_BASE_URL,
+  STATE_EXECUTION_ID,
+  STATE_CAPTURE_STARTED_AT,
   STATE_READY_PATH,
   STATE_STDERR_LOG_PATH,
   STATE_STDOUT_LOG_PATH,
@@ -40,6 +43,9 @@ async function runMain(): Promise<void> {
   }
 
   const controlPlaneBaseUrl = normalizeBaseUrl(readOptionalInputControlPlaneBaseUrl());
+  const executionId = randomUUID();
+  saveState(STATE_EXECUTION_ID, executionId);
+  saveState(STATE_CAPTURE_STARTED_AT, new Date().toISOString());
   const actionRepository = readActionRepository();
   const actionRef = readActionRef();
   const agentVersion = readOptionalInputAgentVersion();

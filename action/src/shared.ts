@@ -12,6 +12,8 @@ export const STATE_READY_PATH = "ready_path";
 export const STATE_STDOUT_LOG_PATH = "stdout_log_path";
 export const STATE_STDERR_LOG_PATH = "stderr_log_path";
 export const STATE_CONTROL_PLANE_BASE_URL = "control_plane_base_url";
+export const STATE_EXECUTION_ID = "execution_id";
+export const STATE_CAPTURE_STARTED_AT = "capture_started_at";
 
 export type LogLevel = "INFO" | "WARN" | "ERROR";
 

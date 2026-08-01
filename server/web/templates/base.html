@@ -46,7 +46,7 @@
           >
 
           <span class="flex items-center gap-2">
-            <span class="sr-only">Signed in as {{ .CurrentUser.Login }}</span>
+            <span class="sr-only">Signed in as {{ if .CurrentUser.Login }}{{ .CurrentUser.Login }}{{ else }}{{ .CurrentUser.DisplayName }}{{ end }}</span>
             {{ if .CurrentUser.AvatarURL }}
             <img
               src="{{ .CurrentUser.AvatarURL }}"
@@ -60,7 +60,7 @@
             <span
               aria-hidden="true"
               class="hidden text-sm font-medium text-slate-700 sm:inline dark:text-slate-300"
-              >{{ .CurrentUser.Login }}</span
+              >{{ if .CurrentUser.Login }}{{ .CurrentUser.Login }}{{ else }}{{ .CurrentUser.DisplayName }}{{ end }}</span
             >
           </span>
 

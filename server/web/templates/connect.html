@@ -24,14 +24,19 @@
     </a>
 
     <h1 class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-      Connect repositories
+      Project repositories
     </h1>
     <p class="mt-1.5 max-w-prose text-sm text-pretty muted">
-      Repositories are managed through your GitHub App installation. Every
-      repository the app can access is available in this project automatically —
-      there is nothing to link by hand.
+      Bind repositories from your GitHub App inventory into this project.
+      Bound repositories become visible on this project's run pages.
     </p>
   </header>
+
+  {{ if .UsingStaleAccess }}
+  <div role="status" class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
+    Showing cached GitHub access data because a live refresh failed.
+  </div>
+  {{ end }}
 
   <section aria-labelledby="available-repos-heading" class="flex flex-col gap-3">
     <h2
@@ -39,22 +44,36 @@
       class="flex items-center gap-2 text-sm font-semibold"
     >
       Available repositories
-      <span class="badge">{{ len .RepoLinks }}</span>
+      <span class="badge">{{ len .Repos }}</span>
     </h2>
 
-    {{ if .RepoLinks }}
+    {{ if .Repos }}
     <ul role="list" class="card divide-y divide-slate-100 dark:divide-slate-800">
-      {{ range .RepoLinks }}
-      <li
-        class="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
-      >
-        <code class="chip max-w-full truncate">{{ .RepoFullName }}</code>
-        <span class="text-xs muted">
-          Installation:
-          <span class="font-medium text-slate-600 dark:text-slate-300"
-            >{{ .TargetLogin }}</span
-          >
-        </span>
+      {{ range .Repos }}
+      <li class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3"></li>
+        <div class="min-w-0">
+          <code class="chip max-w-full truncate">{{ .FullName }}</code>
+          <p class="mt-1 text-xs muted">
+            {{ .Visibility }} · source {{ .UpdatedFrom }}
+          </p>
+        </div>
+        <div class="flex items-center gap-2">
+          {{ if .Bound }}
+            <form method="post" action="/projects/{{ $.Project.Slug }}/repos/unbind">
+              <input type="hidden" name="repo_id" value="{{ .RepoID }}" />
+              <button type="submit" class="btn btn-secondary btn-sm">Unbind</button>
+            </form>
+          {{ else }}
+            {{ if .CanBind }}
+              <form method="post" action="/projects/{{ $.Project.Slug }}/repos/bind">
+                <input type="hidden" name="repo_id" value="{{ .RepoID }}" />
+                <button type="submit" class="btn btn-primary btn-sm">Bind</button>
+              </form>
+            {{ else }}
+              <span class="text-xs muted">No GitHub access</span>
+            {{ end }}
+          {{ end }}
+        </div>
       </li>
       {{ end }}
     </ul>

@@ -3,7 +3,8 @@ import { closeSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { STATE_AGENT_PID, STATE_CONTROL_PLANE_BASE_URL, STATE_READY_PATH, STATE_STDERR_LOG_PATH, STATE_STDOUT_LOG_PATH, STATE_SUMMARY_PATH, formatError, isLinux, log, normalizeBaseUrl, readActionRef, readActionRepository, readOptionalInputAgentVersion, readOptionalInputControlPlaneBaseUrl, saveState, sleep, } from "./shared.js";
+import { randomUUID } from "node:crypto";
+import { STATE_AGENT_PID, STATE_CONTROL_PLANE_BASE_URL, STATE_EXECUTION_ID, STATE_CAPTURE_STARTED_AT, STATE_READY_PATH, STATE_STDERR_LOG_PATH, STATE_STDOUT_LOG_PATH, STATE_SUMMARY_PATH, formatError, isLinux, log, normalizeBaseUrl, readActionRef, readActionRepository, readOptionalInputAgentVersion, readOptionalInputControlPlaneBaseUrl, saveState, sleep, } from "./shared.js";
 const AGENT_CACHE_PREFIX = "ghapp-egress-agent";
 const AGENT_READY_TIMEOUT_MS = 20_000;
 const AGENT_READY_POLL_INTERVAL_MS = 200;
@@ -14,6 +15,9 @@ async function runMain() {
         return;
     }
     const controlPlaneBaseUrl = normalizeBaseUrl(readOptionalInputControlPlaneBaseUrl());
+    const executionId = randomUUID();
+    saveState(STATE_EXECUTION_ID, executionId);
+    saveState(STATE_CAPTURE_STARTED_AT, new Date().toISOString());
     const actionRepository = readActionRepository();
     const actionRef = readActionRef();
     const agentVersion = readOptionalInputAgentVersion();

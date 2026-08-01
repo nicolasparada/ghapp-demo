@@ -24,19 +24,34 @@ type TokenManager struct {
 }
 
 type UploadClaims struct {
-	Repository     string `json:"repository"`
-	CommitSHA      string `json:"sha"`
-	RunID          int64  `json:"run_id"`
-	WorkflowName   string `json:"workflow"`
-	JobWorkflowRef string `json:"job_workflow_ref"`
-	EventName      string `json:"event_name"`
-	Actor          string `json:"actor"`
-	Ref            string `json:"ref"`
-	HeadRef        string `json:"head_ref"`
-	Subject        string `json:"sub"`
-	PayloadSHA256  string `json:"payload_sha256"`
-	JobName        string `json:"job_name"`
-	JobKey         string `json:"job_key"`
+	Repository           string `json:"repository"`
+	RepositoryID         int64  `json:"repository_id"`
+	RepositoryOwnerID    int64  `json:"repository_owner_id"`
+	RepositoryVisibility string `json:"repository_visibility"`
+	CommitSHA            string `json:"sha"`
+	RunID                int64  `json:"run_id"`
+	RunAttempt           int64  `json:"run_attempt"`
+	WorkflowName         string `json:"workflow"`
+	WorkflowRef          string `json:"workflow_ref"`
+	WorkflowSHA          string `json:"workflow_sha"`
+	JobWorkflowRef       string `json:"job_workflow_ref"`
+	JobWorkflowSHA       string `json:"job_workflow_sha"`
+	EventName            string `json:"event_name"`
+	Actor                string `json:"actor"`
+	ActorID              int64  `json:"actor_id"`
+	Ref                  string `json:"ref"`
+	HeadRef              string `json:"head_ref"`
+	Subject              string `json:"sub"`
+	RunnerEnvironment    string `json:"runner_environment"`
+	PayloadSHA256        string `json:"payload_sha256"`
+	ExecutionID          string `json:"execution_id"`
+	JobName              string `json:"job_name"`
+	JobKey               string `json:"job_key"`
+	RunnerName           string `json:"runner_name"`
+	RunnerOS             string `json:"runner_os"`
+	CaptureStartedAt     string `json:"capture_started_at"`
+	CaptureEndedAt       string `json:"capture_ended_at"`
+	GitHubJobID          *int64 `json:"github_job_id"`
 	jwt.RegisteredClaims
 }
 
@@ -66,24 +81,49 @@ func NewTokenManagerWithTTL(appID, appPrivateKeyPEM string, ttl time.Duration) (
 	}, nil
 }
 
-func (m *TokenManager) IssueUploadToken(principal oidc.Principal, payloadSHA256, jobName, jobKey string) (string, time.Time, error) {
+type UploadRequest struct {
+	PayloadSHA256    string
+	ExecutionID      string
+	JobName          string
+	JobKey           string
+	RunnerName       string
+	RunnerOS         string
+	CaptureStartedAt string
+	CaptureEndedAt   string
+}
+
+func (m *TokenManager) IssueUploadToken(principal oidc.Principal, req UploadRequest) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(m.ttl)
 
 	claims := UploadClaims{
-		Repository:     principal.Repository,
-		CommitSHA:      principal.CommitSHA,
-		RunID:          principal.RunID,
-		WorkflowName:   principal.WorkflowName,
-		JobWorkflowRef: principal.JobWorkflowRef,
-		EventName:      principal.EventName,
-		Actor:          principal.Actor,
-		Ref:            principal.Ref,
-		HeadRef:        principal.HeadRef,
-		Subject:        principal.Subject,
-		PayloadSHA256:  payloadSHA256,
-		JobName:        jobName,
-		JobKey:         jobKey,
+		Repository:           principal.Repository,
+		RepositoryID:         principal.RepositoryID,
+		RepositoryOwnerID:    principal.RepositoryOwnerID,
+		RepositoryVisibility: principal.RepositoryVisibility,
+		CommitSHA:            principal.CommitSHA,
+		RunID:                principal.RunID,
+		RunAttempt:           principal.RunAttempt,
+		WorkflowName:         principal.WorkflowName,
+		WorkflowRef:          principal.WorkflowRef,
+		WorkflowSHA:          principal.WorkflowSHA,
+		JobWorkflowRef:       principal.JobWorkflowRef,
+		JobWorkflowSHA:       principal.JobWorkflowSHA,
+		EventName:            principal.EventName,
+		Actor:                principal.Actor,
+		ActorID:              principal.ActorID,
+		Ref:                  principal.Ref,
+		HeadRef:              principal.HeadRef,
+		Subject:              principal.Subject,
+		RunnerEnvironment:    principal.RunnerEnvironment,
+		PayloadSHA256:        req.PayloadSHA256,
+		ExecutionID:          req.ExecutionID,
+		JobName:              req.JobName,
+		JobKey:               req.JobKey,
+		RunnerName:           req.RunnerName,
+		RunnerOS:             req.RunnerOS,
+		CaptureStartedAt:     req.CaptureStartedAt,
+		CaptureEndedAt:       req.CaptureEndedAt,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    m.issuer,
 			Audience:  []string{tokenAudience},
@@ -134,6 +174,18 @@ func (m *TokenManager) VerifyUploadToken(rawToken string) (UploadClaims, error) 
 	}
 	if strings.TrimSpace(claims.PayloadSHA256) == "" {
 		return UploadClaims{}, errors.New("upload token missing payload_sha256 claim")
+	}
+	if strings.TrimSpace(claims.ExecutionID) == "" {
+		return UploadClaims{}, errors.New("upload token missing execution_id claim")
+	}
+	if claims.RepositoryID <= 0 {
+		return UploadClaims{}, errors.New("upload token missing repository_id claim")
+	}
+	if claims.RepositoryOwnerID <= 0 {
+		return UploadClaims{}, errors.New("upload token missing repository_owner_id claim")
+	}
+	if claims.RunAttempt <= 0 {
+		return UploadClaims{}, errors.New("upload token missing run_attempt claim")
 	}
 
 	return claims, nil

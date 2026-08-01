@@ -5,7 +5,7 @@ This service is the control-plane for the PoC.
 It provides:
 - GitHub OAuth login for users
 - Project management UI (server-rendered templates)
-- GitHub App webhook ingestion (installations/repositories)
+- GitHub App-backed run token signing
 - Run ingestion with **verifiable payload integrity** using:
   1. GitHub Actions OIDC token (`/runs/token`)
   2. short-lived signed upload token bound to payload hash (`/runs`)
@@ -60,13 +60,16 @@ GITHUB_CLIENT_SECRET=
 # GitHub App
 GITHUB_APP_ID=
 GITHUB_APP_PRIVATE_KEY=
-GITHUB_APP_WEBHOOK_SECRET=
+TOKEN_ENCRYPTION_KEY=
+
 # Optional: used by "GitHub App access" page buttons
 GITHUB_APP_SLUG=<your-app-slug>
 
 # OIDC verification (defaults shown)
 OIDC_ISSUER=https://token.actions.githubusercontent.com
 OIDC_AUDIENCE=http://localhost:8080
+# Optional allowlist: comma-separated audiences for multiple domains
+# OIDC_AUDIENCE=https://control.example.com,https://control-alt.example.com
 ```
 
 ### Important note on `GITHUB_APP_PRIVATE_KEY`
@@ -102,7 +105,7 @@ After creation:
 
 ---
 
-## 5) Configure GitHub App (for webhooks + signed run upload tokens)
+## 5) Configure GitHub App (for signed run upload tokens)
 
 Go to GitHub:
 - **Settings → Developer settings → GitHub Apps → New GitHub App**
@@ -110,23 +113,18 @@ Go to GitHub:
 ### Basic settings
 - **GitHub App name**: e.g. `ghapp-demo-app-local`
 - **Homepage URL**: `BASE_URL`
-- **Webhook URL**: `BASE_URL/webhooks/github`
-- **Webhook secret**: generate a random string → `GITHUB_APP_WEBHOOK_SECRET`
+
 
 ### Permissions
 At minimum for current functionality:
 - **Repository permissions**
   - Metadata: **Read-only**
+  - Actions: **Read-only**
 
 Recommended for planned PR comments feature:
 - Pull requests: **Read and write**
 
-### Subscribe to events
-Enable:
-- Installation
-- Installation repositories
 
-(Recommended for next phases: Pull request)
 
 ### App credentials
 After creating the app:
@@ -136,17 +134,15 @@ After creating the app:
 ### Install the app
 Install the app into the user/org and configure repository access in GitHub (selected repos or all repos).
 
-The server uses webhook events to populate `installations` and `repo_links`.
-Those GitHub App permissions are the source of truth for repository access in the UI and for `/runs/token` and `/runs`.
-There is no separate repository-selection step in this app.
+The server uses OIDC claims from GitHub Actions as the source of truth for repository identity on `/runs/token` and `/runs`.
+Repository/project visibility for reads is still enforced in the app database.
 
 ---
 
-## 6) Local dev with GitHub callbacks/webhooks
+## 6) Local dev with GitHub callbacks
 
 GitHub must reach your server publicly for:
 - OAuth callback
-- GitHub App webhooks
 
 For local development, use a tunnel (example):
 
@@ -154,9 +150,8 @@ For local development, use a tunnel (example):
 cloudflared tunnel --url http://localhost:8080
 ```
 
-Then set `BASE_URL` to the public tunnel URL and update both GitHub apps:
+Then set `BASE_URL` to the public tunnel URL and update GitHub OAuth callback:
 - OAuth callback: `<BASE_URL>/auth/github/callback`
-- Webhook URL: `<BASE_URL>/webhooks/github`
 
 Also set:
 - `OIDC_AUDIENCE=<BASE_URL>`
@@ -235,7 +230,7 @@ Minimal accepted payload shape:
 The server verifies:
 - upload token signature + expiry
 - payload hash matches the token's `payload_sha256`
-- repo is still linked via GitHub App installation
+- repository/run identity claims are signed by GitHub OIDC and bound into the short-lived upload token
 
 On success: `202 Accepted`.
 
@@ -273,7 +268,7 @@ To enable run upload token signing later, set both:
 
 ### `invalid oidc token`
 Most common cause is audience mismatch.
-Ensure the action requests an ID token with audience exactly equal to `OIDC_AUDIENCE`.
+Ensure the action requests an ID token audience that matches one of the comma-separated values in `OIDC_AUDIENCE`.
 
 ### Cloud SQL tier error: `Invalid Tier (...) for (ENTERPRISE_PLUS) Edition`
 This PoC Terraform is pinned to Cloud SQL `ENTERPRISE` on PostgreSQL 18 with a `db-custom-*` tier (cheaper than ENTERPRISE_PLUS).
@@ -468,7 +463,8 @@ Set these **Repository Secrets** (`Settings → Secrets and variables → Action
 **Optional for bootstrap (set later)**
 - `CONTROL_PLANE_GITHUB_CLIENT_SECRET`
 - `CONTROL_PLANE_GITHUB_APP_PRIVATE_KEY`
-- `CONTROL_PLANE_GITHUB_APP_WEBHOOK_SECRET`
+- `CONTROL_PLANE_TOKEN_ENCRYPTION_KEY`
+
 
 > GitHub does not allow custom variable/secret names starting with `GITHUB_`, so CI inputs use the `CONTROL_PLANE_` prefix.
 > Terraform maps these into runtime env vars expected by the app (`GITHUB_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY`, etc.).
@@ -487,9 +483,7 @@ After first deploy, get service URL from workflow output and update GitHub apps:
 
 - OAuth App callback URL: `<BASE_URL>/auth/github/callback`
 - GitHub App homepage URL: `<BASE_URL>`
-- GitHub App webhook URL: `<BASE_URL>/webhooks/github`
-
-Use a stable domain for production to avoid rotating callback/webhook URLs.
+Use a stable domain for production to avoid rotating callback URLs.
 
 ### E) How to know `CONTROL_PLANE_BASE_URL` beforehand?
 
@@ -501,3 +495,11 @@ Two practical options:
 2. **Bootstrap**: leave `CONTROL_PLANE_BASE_URL` unset for first deploy (workflow falls back to `https://example.invalid`), then copy the deployed Cloud Run URL from Terraform output, set `CONTROL_PLANE_BASE_URL`, and redeploy.
 
 The second deploy updates `BASE_URL`/OIDC audience to the real public URL.
+
+## 11) Pull workers
+
+The five pull workers (visibility sync, coverage sync, binding revalidation, retention purge, job enrichment) run inside the server process as a background goroutine on a 15-minute tick.
+
+They start automatically with the server — no additional infra required.
+
+If the GitHub App client is not configured (no `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`), the workers log that they are disabled and do nothing.

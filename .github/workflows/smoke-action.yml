@@ -9,9 +9,13 @@ permissions:
 
 jobs:
   smoke:
-    name: Run action and generate egress
+    name: Run action and generate egress (leg ${{ matrix.leg }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2]
 
     steps:
       - name: Checkout

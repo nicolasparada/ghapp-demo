@@ -14,10 +14,11 @@ locals {
 
   db_secret_id                        = "ghapp-control-plane-db-password"
   database_url_secret_id              = "ghapp-control-plane-database-url"
-  github_client_secret_secret_id      = "ghapp-control-plane-github-client-secret"
-  github_app_private_key_secret_id    = "ghapp-control-plane-github-app-private-key"
-  github_app_webhook_secret_secret_id = "ghapp-control-plane-github-app-webhook-secret"
-  db_credentials_version              = 1
+  github_client_secret_secret_id    = "ghapp-control-plane-github-client-secret"
+  github_app_private_key_secret_id  = "ghapp-control-plane-github-app-private-key"
+  token_encryption_key_secret_id    = "ghapp-control-plane-token-encryption-key"
+  db_credentials_version            = 1
+  token_encryption_key_version      = 1
 
   iam_db_login_users = toset([
     "parada.nicolas@outlook.com",
@@ -36,9 +37,8 @@ locals {
   sql_connection_name = google_sql_database_instance.main.connection_name
   database_url        = "postgres://${local.sql_database_user}:${urlencode(ephemeral.random_password.db_password.result)}@/${local.sql_database_name}?host=/cloudsql/${local.sql_connection_name}&sslmode=disable"
 
-  has_github_client_secret      = trimspace(var.github_client_secret) != ""
-  has_github_app_private_key    = trimspace(var.github_app_private_key) != ""
-  has_github_app_webhook_secret = trimspace(var.github_app_webhook_secret) != ""
+  has_github_client_secret   = trimspace(var.github_client_secret) != ""
+  has_github_app_private_key = trimspace(var.github_app_private_key) != ""
 }
 
 moved {
@@ -148,6 +148,11 @@ resource "google_sql_database_instance" "main" {
 resource "google_sql_database" "main" {
   name     = local.sql_database_name
   instance = google_sql_database_instance.main.name
+}
+
+ephemeral "random_password" "token_encryption_key" {
+  length  = 32
+  special = false
 }
 
 ephemeral "random_password" "db_password" {
@@ -261,10 +266,10 @@ resource "google_secret_manager_secret_version" "github_app_private_key" {
   secret_data_wo_version = var.app_secrets_version
 }
 
-resource "google_secret_manager_secret" "github_app_webhook_secret" {
-  count = local.has_github_app_webhook_secret ? 1 : 0
 
-  secret_id = local.github_app_webhook_secret_secret_id
+
+resource "google_secret_manager_secret" "token_encryption_key" {
+  secret_id = local.token_encryption_key_secret_id
 
   replication {
     auto {}
@@ -273,13 +278,17 @@ resource "google_secret_manager_secret" "github_app_webhook_secret" {
   depends_on = [google_project_service.secretmanager]
 }
 
-resource "google_secret_manager_secret_version" "github_app_webhook_secret" {
-  count = local.has_github_app_webhook_secret ? 1 : 0
+resource "google_secret_manager_secret_version" "token_encryption_key" {
+  secret = google_secret_manager_secret.token_encryption_key.id
 
-  secret = google_secret_manager_secret.github_app_webhook_secret[0].id
+  secret_data_wo         = ephemeral.random_password.token_encryption_key.result
+  secret_data_wo_version = local.token_encryption_key_version
+}
 
-  secret_data_wo         = var.github_app_webhook_secret
-  secret_data_wo_version = var.app_secrets_version
+resource "google_secret_manager_secret_iam_member" "control_plane_token_encryption_key_accessor" {
+  secret_id = google_secret_manager_secret.token_encryption_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.control_plane.email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "control_plane_database_url_accessor" {
@@ -304,13 +313,7 @@ resource "google_secret_manager_secret_iam_member" "control_plane_github_app_pri
   member    = "serviceAccount:${google_service_account.control_plane.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "control_plane_github_app_webhook_secret_accessor" {
-  count = local.has_github_app_webhook_secret ? 1 : 0
 
-  secret_id = google_secret_manager_secret.github_app_webhook_secret[0].id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.control_plane.email}"
-}
 
 resource "google_project_iam_member" "iam_human_cloudsql_client" {
   for_each = local.should_grant_human_db_project_roles ? local.iam_db_login_users : toset([])
@@ -437,17 +440,13 @@ resource "google_cloud_run_v2_service" "control_plane" {
         }
       }
 
-      dynamic "env" {
-        for_each = local.has_github_app_webhook_secret ? [1] : []
+      env {
+        name = "TOKEN_ENCRYPTION_KEY"
 
-        content {
-          name = "GITHUB_APP_WEBHOOK_SECRET"
-
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.github_app_webhook_secret[0].secret_id
-              version = "latest"
-            }
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.token_encryption_key.secret_id
+            version = "latest"
           }
         }
       }
@@ -479,11 +478,11 @@ resource "google_cloud_run_v2_service" "control_plane" {
     google_secret_manager_secret_version.database_url,
     google_secret_manager_secret_version.github_client_secret,
     google_secret_manager_secret_version.github_app_private_key,
-    google_secret_manager_secret_version.github_app_webhook_secret,
+    google_secret_manager_secret_version.token_encryption_key,
     google_secret_manager_secret_iam_member.control_plane_database_url_accessor,
     google_secret_manager_secret_iam_member.control_plane_github_client_secret_accessor,
     google_secret_manager_secret_iam_member.control_plane_github_app_private_key_accessor,
-    google_secret_manager_secret_iam_member.control_plane_github_app_webhook_secret_accessor,
+    google_secret_manager_secret_iam_member.control_plane_token_encryption_key_accessor,
     google_project_iam_member.control_plane_cloudsql_client,
   ]
 }

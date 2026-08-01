@@ -17,6 +17,8 @@ func TestTemplatesParse(t *testing.T) {
 		"dashboard.html",
 		"project.html",
 		"connect.html",
+		"members.html",
+		"repo_runs.html",
 		"run.html",
 	}
 
@@ -78,9 +80,11 @@ func TestRenderPages(t *testing.T) {
 			"Title":       "My project",
 			"CurrentUser": user,
 			"Project":     project,
-			"Repos":       []string{"octocat/hello-world"},
+			"Repos": []any{map[string]any{
+				"FullName": "octocat/hello-world",
+			}},
 			"Runs": []any{map[string]any{
-				"ID":           int64(1),
+				"PublicID":     "018f39f2-45cd-7a7f-9c59-11b83f7937eb",
 				"CommitSHA":    "0123456789abcdef",
 				"WorkflowName": "CI",
 				"JobName":      "build",
@@ -90,20 +94,43 @@ func TestRenderPages(t *testing.T) {
 			}},
 		},
 		"connect.html": map[string]any{
-			"Title":       "Connect repositories",
+			"Title":       "Project repositories",
 			"CurrentUser": user,
 			"Project":     project,
-			"RepoLinks": []any{map[string]any{
-				"RepoFullName": "octocat/hello-world",
-				"TargetLogin":  "octocat",
+			"Repos": []any{map[string]any{
+				"FullName":    "octocat/hello-world",
+				"Visibility":  "public",
+				"UpdatedFrom": "api",
+				"Bound":       true,
 			}},
 			"GitHubAppInstallURL":  "https://github.com/apps/demo/installations/new",
 			"GitHubAppSettingsURL": "https://github.com/settings/installations",
 		},
-		"run.html": map[string]any{
-			"Title":       "Run details",
+		"members.html": map[string]any{
+			"Title":       "Project members",
 			"CurrentUser": user,
 			"Project":     project,
+		},
+		"repo_runs.html": map[string]any{
+			"Title":       "octocat/hello-world",
+			"CurrentUser": user,
+			"RepoOwner":   "octocat",
+			"RepoName":    "hello-world",
+			"Runs": []any{map[string]any{
+				"PublicID":     "018f39f2-45cd-7a7f-9c59-11b83f7937eb",
+				"CommitSHA":    "0123456789abcdef",
+				"WorkflowName": "CI",
+				"JobName":      "build",
+				"Branch":       "main",
+				"CreatedAt":    createdAt,
+			}},
+		},
+		"run.html": map[string]any{
+			"Title":           "Run details",
+			"CurrentUser":     user,
+			"RepoOwner":       "octocat",
+			"RepoName":        "hello-world",
+			"ShowMemberViews": true,
 			"Run": map[string]any{
 				"RepoFullName": "octocat/hello-world",
 				"CommitSHA":    "0123456789abcdef",

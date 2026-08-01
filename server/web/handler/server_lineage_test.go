@@ -42,7 +42,7 @@ func TestConvertLineageTreeToView(t *testing.T) {
 		},
 	}
 
-	view := convertLineageTreeToView(roots)
+	view := convertLineageTreeToView(roots, true)
 	if len(view) != 1 {
 		t.Fatalf("expected one root view node, got %d", len(view))
 	}
@@ -96,6 +96,27 @@ func TestConfiguredGitHubAppSettingsURL(t *testing.T) {
 				t.Fatalf("configuredGitHubAppSettingsURL(%q, %q) = %q, want %q", tc.settingsURL, tc.installURL, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestConvertLineageTreeToView_PublicHidesCmdlineDerivedLabels(t *testing.T) {
+	t.Parallel()
+
+	roots := []lineageTreePayload{
+		{
+			NodeType: "process",
+			PID:      42,
+			Name:     "python3.12",
+			Cmdline:  "/usr/bin/python3.12 /work/script.py",
+		},
+	}
+
+	view := convertLineageTreeToView(roots, false)
+	if len(view) != 1 {
+		t.Fatalf("expected one root view node, got %d", len(view))
+	}
+	if view[0].Label != "python3.12" {
+		t.Fatalf("expected process name label in public mode, got %q", view[0].Label)
 	}
 }
 

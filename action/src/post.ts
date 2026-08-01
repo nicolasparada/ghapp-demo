@@ -1,8 +1,10 @@
 import { access, appendFile, constants, readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   STATE_AGENT_PID,
   STATE_CONTROL_PLANE_BASE_URL,
+  STATE_EXECUTION_ID,
+  STATE_CAPTURE_STARTED_AT,
   STATE_STDERR_LOG_PATH,
   STATE_STDOUT_LOG_PATH,
   STATE_SUMMARY_PATH,
@@ -15,6 +17,9 @@ import {
 } from "./shared.js";
 
 const MAX_EMITTED_LOG_LINES = 200;
+const RETRYABLE_STATUS_MIN = 500;
+const RETRYABLE_STATUS_MAX = 599;
+const MAX_UPLOAD_ATTEMPTS = 4;
 
 type UploadTokenResponse = {
   readonly upload_token: string;
@@ -304,25 +309,30 @@ async function uploadSummary(controlPlaneBaseUrl: string, summaryBytes: Buffer):
   const jobKey = readJobKey(jobName);
 
   const uploadTokenResponse = await requestUploadToken({
-    baseUrl: controlPlaneBaseUrl,
-    oidcToken,
-    payloadSha256: summarySha256,
-    jobName,
-    jobKey,
-  });
+		baseUrl: controlPlaneBaseUrl,
+		oidcToken,
+		payloadSha256: summarySha256,
+		executionId: readExecutionID(),
+		jobName,
+		jobKey,
+		runnerName: readRunnerName(),
+		runnerOS: readRunnerOS(),
+		captureStartedAt: readCaptureStartedAt(),
+		captureEndedAt: new Date().toISOString(),
+	});
 
   const runsEndpoint = new URL("/runs", `${controlPlaneBaseUrl}/`).toString();
 
   const summaryText = summaryBytes.toString("utf8");
 
-  const response = await fetch(runsEndpoint, {
+  const response = await fetchWithRetry(runsEndpoint, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${uploadTokenResponse.upload_token}`,
       "Content-Type": "application/json",
     },
     body: summaryText,
-  });
+  }, "upload /runs");
 
   if (!response.ok) {
     const bodyText = await response.text();
@@ -346,13 +356,13 @@ async function requestOidcToken(audience: string): Promise<string> {
   const requestUrl = new URL(requestUrlRaw);
   requestUrl.searchParams.set("audience", audience);
 
-  const response = await fetch(requestUrl, {
+  const response = await fetchWithRetry(requestUrl, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${requestToken}`,
       "User-Agent": "ghapp-egress-action",
     },
-  });
+  }, "request OIDC token");
 
   if (!response.ok) {
     const bodyText = await response.text();
@@ -365,6 +375,45 @@ async function requestOidcToken(audience: string): Promise<string> {
   }
 
   return payload.value;
+}
+
+async function fetchWithRetry(input: URL | string, init: RequestInit, label: string): Promise<Response> {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(input, init);
+      if (
+        response.status >= RETRYABLE_STATUS_MIN &&
+        response.status <= RETRYABLE_STATUS_MAX &&
+        attempt < MAX_UPLOAD_ATTEMPTS
+      ) {
+        log("WARN", `${label} returned ${response.status}; retrying attempt ${attempt + 1}/${MAX_UPLOAD_ATTEMPTS}`);
+        await response.arrayBuffer();
+        await sleep(backoffDelayMs(attempt));
+        continue;
+      }
+      return response;
+    } catch (error: unknown) {
+      lastError = error;
+      if (attempt >= MAX_UPLOAD_ATTEMPTS) {
+        break;
+      }
+      log(
+        "WARN",
+        `${label} failed on attempt ${attempt}/${MAX_UPLOAD_ATTEMPTS}: ${formatError(error)}; retrying`,
+      );
+      await sleep(backoffDelayMs(attempt));
+    }
+  }
+
+  throw new Error(`${label} failed after ${MAX_UPLOAD_ATTEMPTS} attempts: ${formatError(lastError)}`);
+}
+
+function backoffDelayMs(attempt: number): number {
+  const base = 300;
+  const delay = base * 2 ** (attempt - 1);
+  return Math.min(delay, 3000);
 }
 
 type OidcTokenResponse = {
@@ -381,15 +430,20 @@ function isOidcTokenResponse(value: unknown): value is OidcTokenResponse {
 }
 
 async function requestUploadToken(args: {
-  readonly baseUrl: string;
-  readonly oidcToken: string;
-  readonly payloadSha256: string;
-  readonly jobName: string;
-  readonly jobKey: string;
+	readonly baseUrl: string;
+	readonly oidcToken: string;
+	readonly payloadSha256: string;
+	readonly executionId: string;
+	readonly jobName: string;
+	readonly jobKey: string;
+	readonly runnerName: string;
+	readonly runnerOS: string;
+	readonly captureStartedAt: string;
+	readonly captureEndedAt: string;
 }): Promise<UploadTokenResponse> {
   const endpoint = new URL("/runs/token", `${args.baseUrl}/`).toString();
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithRetry(endpoint, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${args.oidcToken}`,
@@ -397,10 +451,15 @@ async function requestUploadToken(args: {
     },
     body: JSON.stringify({
       payload_sha256: args.payloadSha256,
+      execution_id: args.executionId,
       job_name: args.jobName,
       job_key: args.jobKey,
+      runner_name: args.runnerName,
+      runner_os: args.runnerOS,
+      capture_started_at: args.captureStartedAt,
+      capture_ended_at: args.captureEndedAt,
     }),
-  });
+  }, "request /runs/token");
 
   if (!response.ok) {
     const bodyText = await response.text();
@@ -429,6 +488,30 @@ function isUploadTokenResponse(value: unknown): value is UploadTokenResponse {
   }
 
   return true;
+}
+
+function readExecutionID(): string {
+  const fromState = getState(STATE_EXECUTION_ID);
+  if (fromState !== null && fromState !== "") {
+    return fromState;
+  }
+  return randomUUID();
+}
+
+function readCaptureStartedAt(): string {
+  const fromState = getState(STATE_CAPTURE_STARTED_AT);
+  if (fromState !== null && fromState !== "") {
+    return fromState;
+  }
+  return new Date().toISOString();
+}
+
+function readRunnerName(): string {
+  return process.env.RUNNER_NAME ?? "";
+}
+
+function readRunnerOS(): string {
+  return process.env.RUNNER_OS ?? "";
 }
 
 function readJobName(): string {

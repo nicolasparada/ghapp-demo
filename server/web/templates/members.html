@@ -1,0 +1,36 @@
+{{ define "content" }}
+<div class="mx-auto flex max-w-3xl flex-col gap-8">
+  <header>
+    <a
+      href="/projects/{{ .Project.Slug }}"
+      class="inline-flex items-center gap-1.5 rounded text-xs font-medium muted transition hover:text-slate-900 dark:hover:text-white"
+    >
+      <svg
+        aria-hidden="true"
+        focusable="false"
+        class="size-3.5 shrink-0"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
+        />
+      </svg>
+      {{ .Project.Name }}
+    </a>
+
+    <h1 class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">Members</h1>
+    <p class="mt-1.5 max-w-prose text-sm text-pretty muted">
+      Membership management UI lands in a follow-up change.
+    </p>
+  </header>
+
+  <p class="card p-6 text-sm muted">
+    This project is already protected by membership checks. Invite/remove flows are not implemented yet.
+  </p>
+</div>
+{{ end }}
